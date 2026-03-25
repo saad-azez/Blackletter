@@ -1,0 +1,17 @@
+{
+  "library": {
+    "name": "Blackletter",
+    "components": [
+      "./src/**/*.webflow.@(js|jsx|mjs|ts|tsx)"
+    ],
+    "description": "Blackletter website is a part of the gaming experience that establishes Blackletter’s brand identity, connects our community (social media, contact us), provides interactive ‘war manual’ (rulebook), and sells our miniatures and trading cards.",
+    "id": "blackletter"
+  },
+  "telemetry": {
+    "global": {
+      "allowTelemetry": true,
+      "lastPrompted": 1774357701435,
+      "version": "1.13.0"
+    }
+  }
+}
