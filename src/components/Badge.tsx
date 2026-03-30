@@ -17,6 +17,11 @@ type BadgeVariant = 'Light' | 'Dark';
 interface BadgeProps {
   variant: BadgeVariant;
   modelUrl?: string;
+  resourcePath?: string;
+  cloudVortexTextureUrl?: string;
+  floorTextureUrl?: string;
+  mapeTextureUrl?: string;
+  windowIslamicArtTextureUrl?: string;
   modelScale?: number;
   cameraIntensity?: number;
 }
@@ -32,6 +37,8 @@ interface SceneContentProps {
   cameraIntensity: number;
   modelScale: number;
   modelUrl: string;
+  resourcePath: string;
+  textureOverrides: TextureOverrides;
   pointerTarget: MutableRefObject<THREE.Vector2>;
   theme: SceneTheme;
 }
@@ -39,12 +46,21 @@ interface SceneContentProps {
 interface SceneModelProps {
   modelScale: number;
   modelUrl: string;
+  resourcePath: string;
+  textureOverrides: TextureOverrides;
   pointerTarget: MutableRefObject<THREE.Vector2>;
 }
 
 interface CameraRigProps {
   intensity: number;
   pointerTarget: MutableRefObject<THREE.Vector2>;
+}
+
+interface TextureOverrides {
+  cloudVortexTextureUrl?: string;
+  floorTextureUrl?: string;
+  mapeTextureUrl?: string;
+  windowIslamicArtTextureUrl?: string;
 }
 
 const themes: Record<BadgeVariant, SceneTheme> = {
@@ -65,6 +81,90 @@ const themes: Record<BadgeVariant, SceneTheme> = {
 const DEBUG_PREFIX = '[Badge3D]';
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const interactionSelector = '.frame';
+const textureOverrideDescriptors = [
+  {
+    assetUri: 'u1272336289_massive_cloud_vortex_--ar_3235_--v_7_45d73369-0c2c-439f-a443-b555a1d85db6.png',
+    propKey: 'cloudVortexTextureUrl',
+  },
+  {
+    assetUri: 'floor%20.png',
+    propKey: 'floorTextureUrl',
+  },
+  {
+    assetUri: 'Mape.jpg',
+    propKey: 'mapeTextureUrl',
+  },
+  {
+    assetUri: 'Window%20islamic%20art.webp',
+    propKey: 'windowIslamicArtTextureUrl',
+  },
+] as const satisfies ReadonlyArray<{
+  assetUri: string;
+  propKey: keyof TextureOverrides;
+}>;
+
+function getModelFormat(modelUrl: string) {
+  const normalizedUrl = modelUrl.split('?')[0]?.split('#')[0]?.toLowerCase() ?? '';
+
+  if (normalizedUrl.endsWith('.gltf')) {
+    return 'gltf';
+  }
+
+  if (normalizedUrl.endsWith('.glb')) {
+    return 'glb';
+  }
+
+  return 'unknown';
+}
+
+function ensureTrailingSlash(value: string) {
+  return value.endsWith('/') ? value : `${value}/`;
+}
+
+function getDefaultResourcePath(modelUrl: string) {
+  try {
+    const parsedUrl = new URL(modelUrl, window.location.href);
+    const directoryPath = parsedUrl.pathname.slice(0, parsedUrl.pathname.lastIndexOf('/') + 1);
+
+    return `${parsedUrl.origin}${directoryPath}`;
+  } catch {
+    const lastSlashIndex = modelUrl.lastIndexOf('/');
+
+    if (lastSlashIndex === -1) {
+      return '';
+    }
+
+    return modelUrl.slice(0, lastSlashIndex + 1);
+  }
+}
+
+function normalizeAssetKey(value: string) {
+  const withoutQuery = value.split('?')[0]?.split('#')[0] ?? '';
+  const lastSlashIndex = withoutQuery.lastIndexOf('/');
+  const fileName = lastSlashIndex >= 0 ? withoutQuery.slice(lastSlashIndex + 1) : withoutQuery;
+
+  try {
+    return decodeURIComponent(fileName).toLowerCase();
+  } catch {
+    return fileName.toLowerCase();
+  }
+}
+
+function buildTextureOverrideMap(textureOverrides: TextureOverrides) {
+  const overrideMap = new Map<string, string>();
+
+  for (const descriptor of textureOverrideDescriptors) {
+    const overrideUrl = textureOverrides[descriptor.propKey]?.trim();
+
+    if (!overrideUrl) {
+      continue;
+    }
+
+    overrideMap.set(normalizeAssetKey(descriptor.assetUri), overrideUrl);
+  }
+
+  return overrideMap;
+}
 
 function shapePointerAxis(value: number) {
   const clampedValue = THREE.MathUtils.clamp(value, -1, 1);
@@ -75,6 +175,11 @@ function shapePointerAxis(value: number) {
 export const Badge = ({
   variant,
   modelUrl = '',
+  resourcePath = '',
+  cloudVortexTextureUrl = '',
+  floorTextureUrl = '',
+  mapeTextureUrl = '',
+  windowIslamicArtTextureUrl = '',
   modelScale = 1,
   cameraIntensity = 0.35,
 }: BadgeProps) => {
@@ -82,15 +187,35 @@ export const Badge = ({
   const pointerTarget = useRef(new THREE.Vector2());
   const theme = themes[variant];
   const resolvedModelUrl = modelUrl.trim();
+  const resolvedResourcePath = resourcePath.trim();
+  const modelFormat = getModelFormat(resolvedModelUrl);
+  const textureOverrides = useMemo<TextureOverrides>(
+    () => ({
+      cloudVortexTextureUrl: cloudVortexTextureUrl.trim(),
+      floorTextureUrl: floorTextureUrl.trim(),
+      mapeTextureUrl: mapeTextureUrl.trim(),
+      windowIslamicArtTextureUrl: windowIslamicArtTextureUrl.trim(),
+    }),
+    [
+      cloudVortexTextureUrl,
+      floorTextureUrl,
+      mapeTextureUrl,
+      windowIslamicArtTextureUrl,
+    ],
+  );
   const isBrowser = typeof window !== 'undefined';
 
   useEffect(() => {
     console.info(`${DEBUG_PREFIX} component-mounted`, {
       cameraIntensity,
       isBrowser,
+      modelFormat,
       modelScale,
       modelUrlProp: modelUrl,
+      resourcePathProp: resourcePath,
       resolvedModelUrl,
+      resolvedResourcePath,
+      textureOverrides,
       variant,
     });
 
@@ -99,7 +224,18 @@ export const Badge = ({
         message: 'No model URL was provided, so nothing will render.',
       });
     }
-  }, [cameraIntensity, isBrowser, modelScale, modelUrl, resolvedModelUrl, variant]);
+  }, [
+    cameraIntensity,
+    isBrowser,
+    modelFormat,
+    modelScale,
+    modelUrl,
+    resolvedModelUrl,
+    resolvedResourcePath,
+    resourcePath,
+    textureOverrides,
+    variant,
+  ]);
 
   useEffect(() => {
     if (!isBrowser || !sectionRef.current) {
@@ -211,6 +347,8 @@ export const Badge = ({
             cameraIntensity={cameraIntensity}
             modelScale={modelScale}
             modelUrl={resolvedModelUrl}
+            resourcePath={resolvedResourcePath}
+            textureOverrides={textureOverrides}
             pointerTarget={pointerTarget}
             theme={theme}
           />
@@ -224,6 +362,8 @@ function SceneContent({
   cameraIntensity,
   modelScale,
   modelUrl,
+  resourcePath,
+  textureOverrides,
   pointerTarget,
   theme,
 }: SceneContentProps) {
@@ -231,9 +371,11 @@ function SceneContent({
     console.info(`${DEBUG_PREFIX} scene-content`, {
       cameraIntensity,
       modelScale,
+      resourcePath,
+      textureOverrides,
       modelUrl,
     });
-  }, [cameraIntensity, modelScale, modelUrl]);
+  }, [cameraIntensity, modelScale, modelUrl, resourcePath, textureOverrides]);
 
   return (
     <>
@@ -257,6 +399,8 @@ function SceneContent({
           key={modelUrl}
           modelScale={modelScale}
           modelUrl={modelUrl}
+          resourcePath={resourcePath}
+          textureOverrides={textureOverrides}
           pointerTarget={pointerTarget}
         />
       ) : null}
@@ -297,34 +441,73 @@ function SceneEnvironment() {
   return null;
 }
 
-function SceneModel({ modelScale, modelUrl, pointerTarget }: SceneModelProps) {
+function SceneModel({
+  modelScale,
+  modelUrl,
+  resourcePath,
+  textureOverrides,
+  pointerTarget,
+}: SceneModelProps) {
   const [gltf, setGltf] = useState<GLTF | null>(null);
   const group = useRef<THREE.Group>(null);
   const { viewport } = useThree();
+  const modelFormat = getModelFormat(modelUrl);
+  const resolvedResourcePath =
+    resourcePath || (modelFormat === 'gltf' ? getDefaultResourcePath(modelUrl) : '');
+  const textureOverrideMap = useMemo(
+    () => buildTextureOverrideMap(textureOverrides),
+    [textureOverrides],
+  );
 
   useEffect(() => {
     let cancelled = false;
+    const loadingManager = new THREE.LoadingManager();
     const dracoLoader = new DRACOLoader();
-    const loader = new GLTFLoader();
+    const loader = new GLTFLoader(loadingManager);
     dracoLoader.setDecoderPath(dracoDecoderPath);
     dracoLoader.setDecoderConfig({ type: 'js' });
     dracoLoader.preload();
     loader.setDRACOLoader(dracoLoader);
     loader.setCrossOrigin('anonymous');
 
-    console.info(`${DEBUG_PREFIX} glb-load-start`, {
+    loadingManager.setURLModifier((requestedUrl) => {
+      const overrideUrl = textureOverrideMap.get(normalizeAssetKey(requestedUrl));
+
+      if (overrideUrl) {
+        console.info(`${DEBUG_PREFIX} texture-override-hit`, {
+          overrideUrl,
+          requestedUrl,
+        });
+
+        return overrideUrl;
+      }
+
+      return requestedUrl;
+    });
+
+    if (resolvedResourcePath) {
+      loader.setResourcePath(ensureTrailingSlash(resolvedResourcePath));
+    }
+
+    console.info(`${DEBUG_PREFIX} model-load-start`, {
       dracoDecoderPath,
+      modelFormat,
       modelUrl,
+      resolvedResourcePath,
+      textureOverrides,
     });
 
     loader.load(
       modelUrl,
       (loadedModel) => {
-        console.info(`${DEBUG_PREFIX} glb-load-success`, {
+        console.info(`${DEBUG_PREFIX} model-load-success`, {
           animations: loadedModel.animations.length,
           cameras: loadedModel.cameras.length,
           childCount: loadedModel.scene.children.length,
+          modelFormat,
           modelUrl,
+          resolvedResourcePath,
+          textureOverrides,
         });
 
         if (!cancelled) {
@@ -336,18 +519,23 @@ function SceneModel({ modelScale, modelUrl, pointerTarget }: SceneModelProps) {
         const loaded = event.loaded || 0;
         const progress = total > 0 ? loaded / total : null;
 
-        console.info(`${DEBUG_PREFIX} glb-load-progress`, {
+        console.info(`${DEBUG_PREFIX} model-load-progress`, {
           loaded,
+          modelFormat,
           modelUrl,
           progress,
+          resolvedResourcePath,
           total,
         });
       },
       (error) => {
-        console.error(`${DEBUG_PREFIX} glb-load-error`, {
+        console.error(`${DEBUG_PREFIX} model-load-error`, {
           error,
           message: error instanceof Error ? error.message : String(error),
+          modelFormat,
           modelUrl,
+          resolvedResourcePath,
+          textureOverrides,
         });
       },
     );
@@ -355,18 +543,32 @@ function SceneModel({ modelScale, modelUrl, pointerTarget }: SceneModelProps) {
     return () => {
       cancelled = true;
       dracoLoader.dispose();
-      console.info(`${DEBUG_PREFIX} glb-loader-disposed`, { modelUrl });
+      console.info(`${DEBUG_PREFIX} model-loader-disposed`, {
+        modelFormat,
+        modelUrl,
+        resolvedResourcePath,
+        textureOverrides,
+      });
     };
-  }, [modelUrl]);
+  }, [modelFormat, modelUrl, resolvedResourcePath, textureOverrideMap, textureOverrides]);
 
   useEffect(() => {
     console.info(`${DEBUG_PREFIX} viewport-state`, {
       modelScale,
+      resourcePath: resolvedResourcePath,
+      textureOverrides,
       modelUrl,
       viewportHeight: viewport.height,
       viewportWidth: viewport.width,
     });
-  }, [modelScale, modelUrl, viewport.height, viewport.width]);
+  }, [
+    modelScale,
+    modelUrl,
+    resolvedResourcePath,
+    textureOverrides,
+    viewport.height,
+    viewport.width,
+  ]);
 
   const preparedScene = useMemo(() => {
     if (!gltf) {
