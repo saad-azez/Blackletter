@@ -1,9 +1,21 @@
-import { Badge } from './components/Badge';
+import { CastleScene } from './components/CastleScene';
 
-const previewModelUrl = new URL('./assets/low_poly_mccree.glb', import.meta.url).href;
+const previewModelUrl = '/assets/Castle/Castle.gltf';
+const previewResourcePath = '/assets/Castle/';
+const previewBinaryUrl = '/assets/Castle/Castle.bin';
 
 function App() {
-  return <Badge cameraIntensity={0.38} modelScale={1} modelUrl={previewModelUrl} variant="Dark" />;
+  return (
+    <CastleScene
+      binaryUrl={previewBinaryUrl}
+      cameraIntensity={0.38}
+      modelScale={1}
+      modelUrl={previewModelUrl}
+      resourcePath={previewResourcePath}
+      showGui
+      showAxesHelpers
+    />
+  );
 }
 
 export default App;

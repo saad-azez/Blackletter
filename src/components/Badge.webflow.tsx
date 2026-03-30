@@ -4,8 +4,8 @@ import { declareComponent } from '@webflow/react';
 import { Badge } from './Badge';
 
 const badgeWebflow = declareComponent(Badge, {
-  name: '3D Scene Card',
-  description: 'A reusable full-viewport 3D scene with subtle mouse-driven camera movement.',
+  name: '3D Badge',
+  description: 'A simple fullscreen 3D scene with camera drift.',
   group: 'Media',
   options: {
     ssr: false,
@@ -19,35 +19,7 @@ const badgeWebflow = declareComponent(Badge, {
     modelUrl: props.Text({
       name: 'Model URL',
       defaultValue: '',
-      tooltip:
-        'Paste a public GLB or GLTF URL. For GLTF files, keep the .bin and textures publicly accessible too.',
-    }),
-    resourcePath: props.Text({
-      name: 'Resource Path',
-      defaultValue: '',
-      tooltip:
-        'Optional base URL for GLTF companion files like .bin and textures. Leave blank when those files sit beside the GLTF file.',
-    }),
-    cloudVortexTextureUrl: props.Text({
-      name: 'Cloud Vortex Texture',
-      defaultValue: '',
-      tooltip:
-        'Override for u1272336289_massive_cloud_vortex_--ar_3235_--v_7_45d73369-0c2c-439f-a443-b555a1d85db6.png.',
-    }),
-    floorTextureUrl: props.Text({
-      name: 'Floor Texture',
-      defaultValue: '',
-      tooltip: 'Override for floor%20.png.',
-    }),
-    mapeTextureUrl: props.Text({
-      name: 'Mape Texture',
-      defaultValue: '',
-      tooltip: 'Override for Mape.jpg.',
-    }),
-    windowIslamicArtTextureUrl: props.Text({
-      name: 'Window Texture',
-      defaultValue: '',
-      tooltip: 'Override for Window%20islamic%20art.webp.',
+      tooltip: 'Paste a public GLB or GLTF URL. For GLTF files, keep companion assets in the same folder.',
     }),
     modelScale: props.Number({
       name: 'Model Scale',
@@ -55,7 +27,6 @@ const badgeWebflow = declareComponent(Badge, {
       min: 0.1,
       max: 5,
       decimals: 2,
-      tooltip: 'Use this when your model needs to appear larger or smaller inside the scene.',
     }),
     cameraIntensity: props.Number({
       name: 'Camera Drift',
@@ -63,7 +34,27 @@ const badgeWebflow = declareComponent(Badge, {
       min: 0,
       max: 1.5,
       decimals: 2,
-      tooltip: 'Controls how much the camera reacts to pointer movement.',
+    }),
+    cameraX: props.Number({
+      name: 'Camera X',
+      defaultValue: 0,
+      min: -20,
+      max: 20,
+      decimals: 2,
+    }),
+    cameraY: props.Number({
+      name: 'Camera Y',
+      defaultValue: 0,
+      min: -20,
+      max: 20,
+      decimals: 2,
+    }),
+    cameraZ: props.Number({
+      name: 'Camera Z',
+      defaultValue: 6.1,
+      min: 0.5,
+      max: 20,
+      decimals: 2,
     }),
   },
 });

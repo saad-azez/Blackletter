@@ -581,24 +581,24 @@
 	],
 	"images":[
 		{
-			"mimeType":"image/png",
+			"mimeType":"image/jpeg",
 			"name":"u1272336289_massive_cloud_vortex_--ar_3235_--v_7_45d73369-0c2c-439f-a443-b555a1d85db6",
-			"uri":"u1272336289_massive_cloud_vortex_--ar_3235_--v_7_45d73369-0c2c-439f-a443-b555a1d85db6.png"
+			"uri":"cloud.jpeg"
 		},
 		{
 			"mimeType":"image/png",
 			"name":"floor ",
-			"uri":"floor%20.png"
+			"uri":"floor.png"
 		},
 		{
 			"mimeType":"image/jpeg",
 			"name":"Mape",
-			"uri":"Mape.jpg"
+			"uri":"cloud.jpeg"
 		},
 		{
 			"mimeType":"image/webp",
 			"name":"Window islamic art",
-			"uri":"Window%20islamic%20art.webp"
+			"uri":"window.webp"
 		}
 	],
 	"accessors":[
