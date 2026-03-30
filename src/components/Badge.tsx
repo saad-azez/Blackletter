@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type MutableRefObject,
-  type PointerEvent,
 } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -65,6 +64,13 @@ const themes: Record<BadgeVariant, SceneTheme> = {
 
 const DEBUG_PREFIX = '[Badge3D]';
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
+const interactionSelector = '.frame';
+
+function shapePointerAxis(value: number) {
+  const clampedValue = THREE.MathUtils.clamp(value, -1, 1);
+
+  return Math.sign(clampedValue) * Math.pow(Math.abs(clampedValue), 1.2);
+}
 
 export const Badge = ({
   variant,
@@ -72,6 +78,7 @@ export const Badge = ({
   modelScale = 1,
   cameraIntensity = 0.35,
 }: BadgeProps) => {
+  const sectionRef = useRef<HTMLElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
   const theme = themes[variant];
   const resolvedModelUrl = modelUrl.trim();
@@ -94,22 +101,82 @@ export const Badge = ({
     }
   }, [cameraIntensity, isBrowser, modelScale, modelUrl, resolvedModelUrl, variant]);
 
-  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
-    const y = 1 - ((event.clientY - bounds.top) / bounds.height) * 2;
+  useEffect(() => {
+    if (!isBrowser || !sectionRef.current) {
+      return undefined;
+    }
 
-    pointerTarget.current.set(x, y);
-  };
+    const sectionElement = sectionRef.current;
+    const closestFrame = sectionElement.closest(interactionSelector);
+    const interactionElement =
+      (closestFrame instanceof HTMLElement
+        ? closestFrame
+        : document.querySelector(interactionSelector)) ?? sectionElement;
 
-  const resetPointer = () => {
-    pointerTarget.current.set(0, 0);
-  };
+    console.info(`${DEBUG_PREFIX} interaction-scope`, {
+      className:
+        interactionElement instanceof HTMLElement ? interactionElement.className : sectionElement.className,
+      selector: interactionSelector,
+      source: interactionElement === sectionElement ? 'component' : 'frame',
+      tagName:
+        interactionElement instanceof HTMLElement ? interactionElement.tagName.toLowerCase() : 'section',
+    });
+
+    const resetPointer = () => {
+      pointerTarget.current.set(0, 0);
+    };
+
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      const bounds = interactionElement.getBoundingClientRect();
+
+      if (!bounds.width || !bounds.height) {
+        resetPointer();
+        return;
+      }
+
+      const withinBounds =
+        event.clientX >= bounds.left &&
+        event.clientX <= bounds.right &&
+        event.clientY >= bounds.top &&
+        event.clientY <= bounds.bottom;
+
+      if (!withinBounds) {
+        resetPointer();
+        return;
+      }
+
+      const normalizedX = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+      const normalizedY = 1 - ((event.clientY - bounds.top) / bounds.height) * 2;
+
+      pointerTarget.current.set(shapePointerAxis(normalizedX), shapePointerAxis(normalizedY));
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        resetPointer();
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    window.addEventListener('pointerdown', handlePointerMove, { passive: true });
+    window.addEventListener('blur', resetPointer);
+    interactionElement.addEventListener('pointerleave', resetPointer);
+    interactionElement.addEventListener('pointercancel', resetPointer);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerdown', handlePointerMove);
+      window.removeEventListener('blur', resetPointer);
+      interactionElement.removeEventListener('pointerleave', resetPointer);
+      interactionElement.removeEventListener('pointercancel', resetPointer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isBrowser]);
 
   return (
     <section
-      onPointerLeave={resetPointer}
-      onPointerMove={handlePointerMove}
+      ref={sectionRef}
       style={{
         position: 'relative',
         width: '100vw',
@@ -344,10 +411,22 @@ function SceneModel({ modelScale, modelUrl, pointerTarget }: SceneModelProps) {
 
     const { x, y } = pointerTarget.current;
 
-    group.current.position.x = THREE.MathUtils.damp(group.current.position.x, x * 0.16, 4, delta);
-    group.current.position.y = THREE.MathUtils.damp(group.current.position.y, -0.2 + y * 0.08, 4, delta);
-    group.current.rotation.x = THREE.MathUtils.damp(group.current.rotation.x, y * 0.12, 4, delta);
-    group.current.rotation.y = THREE.MathUtils.damp(group.current.rotation.y, x * 0.3, 4, delta);
+    group.current.position.x = THREE.MathUtils.damp(group.current.position.x, x * 0.12, 3.2, delta);
+    group.current.position.y = THREE.MathUtils.damp(group.current.position.y, -0.18 + y * 0.06, 3.2, delta);
+    group.current.position.z = THREE.MathUtils.damp(
+      group.current.position.z,
+      -Math.abs(x) * 0.04 - Math.abs(y) * 0.03,
+      3,
+      delta,
+    );
+    group.current.rotation.x = THREE.MathUtils.damp(group.current.rotation.x, -y * 0.06, 3.4, delta);
+    group.current.rotation.y = THREE.MathUtils.damp(group.current.rotation.y, x * 0.12, 3.4, delta);
+    group.current.rotation.z = THREE.MathUtils.damp(
+      group.current.rotation.z,
+      x * y * -0.03,
+      3.2,
+      delta,
+    );
   });
 
   useEffect(() => {
@@ -374,40 +453,63 @@ function SceneModel({ modelScale, modelUrl, pointerTarget }: SceneModelProps) {
 
 function CameraRig({ intensity, pointerTarget }: CameraRigProps) {
   const smoothedPointer = useRef(new THREE.Vector2());
+  const lookAtTarget = useRef(new THREE.Vector3(0, 0, 0));
 
-  useFrame(({ camera }, delta) => {
+  useFrame((state, delta) => {
+    const { camera, clock } = state;
+    const elapsedTime = clock.getElapsedTime();
+
     smoothedPointer.current.x = THREE.MathUtils.damp(
       smoothedPointer.current.x,
       pointerTarget.current.x,
-      3.5,
+      2.6,
       delta,
     );
     smoothedPointer.current.y = THREE.MathUtils.damp(
       smoothedPointer.current.y,
       pointerTarget.current.y,
-      3.5,
+      2.6,
       delta,
     );
 
+    const idleX = Math.sin(elapsedTime * 0.32) * 0.035;
+    const idleY = Math.cos(elapsedTime * 0.24) * 0.028;
+    const parallaxX = smoothedPointer.current.x * intensity;
+    const parallaxY = smoothedPointer.current.y * intensity;
+
     camera.position.x = THREE.MathUtils.damp(
       camera.position.x,
-      smoothedPointer.current.x * intensity,
-      4,
+      parallaxX * 0.6 + idleX,
+      3.2,
       delta,
     );
     camera.position.y = THREE.MathUtils.damp(
       camera.position.y,
-      smoothedPointer.current.y * intensity * 0.65,
-      4,
+      parallaxY * 0.28 + idleY,
+      3,
       delta,
     );
     camera.position.z = THREE.MathUtils.damp(
       camera.position.z,
-      6 - Math.abs(smoothedPointer.current.x) * intensity * 0.35,
-      4,
+      6.1 - Math.abs(parallaxX) * 0.14 - Math.abs(parallaxY) * 0.08,
+      3.4,
       delta,
     );
-    camera.lookAt(0, 0, 0);
+
+    lookAtTarget.current.x = THREE.MathUtils.damp(
+      lookAtTarget.current.x,
+      parallaxX * 0.22,
+      2.8,
+      delta,
+    );
+    lookAtTarget.current.y = THREE.MathUtils.damp(
+      lookAtTarget.current.y,
+      parallaxY * 0.12,
+      2.8,
+      delta,
+    );
+
+    camera.lookAt(lookAtTarget.current);
   });
 
   return null;
