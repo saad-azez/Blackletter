@@ -1,132 +1,168 @@
-import { Float, OrbitControls } from '@react-three/drei';
+import {
+  Clone,
+  OrbitControls,
+  OrthographicCamera,
+  PerspectiveCamera,
+  useGLTF,
+  useTexture,
+} from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import GUI from 'lil-gui';
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
+import rocksTextureUrl from '../assets/Textures/rocks.png';
+import vortexTextureUrl from '../assets/Textures/vortex.jpeg';
 import {
   castleCameraAxisControls,
   castlePerspectiveCamera,
+  castleTowerDefaults,
+  castleTransformDefaults,
+  overlayOffsetControls,
+  rocksOverlayDefaults,
+  skyTransformDefaults,
+  uniformScaleControl,
+  towerPositionAxisControls,
+  towerRotationAxisControls,
+  type CastleTransform,
+  type RocksOverlayTransform,
   type SceneCameraPosition,
+  type SkyTransform,
+  type TowerTransform,
 } from './CastleScene.config';
+
+const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
+const defaultModelUrl = '/assets/Castle-Building/castle-building.glb';
+const defaultTowerModelUrl = '/assets/Castle/Tower/Tower.glb';
+const cameraModes = ['Perspective', 'Orthographic'] as const;
+
+useGLTF.preload(defaultModelUrl, dracoDecoderPath);
+useGLTF.preload(defaultTowerModelUrl, dracoDecoderPath);
+useTexture.preload(vortexTextureUrl);
+
+type CameraMode = (typeof cameraModes)[number];
 
 export interface CastleSceneProps {
   modelUrl?: string;
-  resourcePath?: string;
-  binaryUrl?: string;
   modelScale?: number;
   cameraIntensity?: number;
   cameraX?: number;
   cameraY?: number;
   cameraZ?: number;
   showGui?: boolean;
-  showAxesHelpers?: boolean;
-  selectedNodeName?: string;
-  selectedNodeOnlyMotion?: boolean;
-}
-
-interface SceneContentProps {
-  binaryUrl: string;
-  cameraIntensity: number;
-  cameraPosition: SceneCameraPosition;
-  debugConfig: SceneDebugConfig;
-  modelScale: number;
-  modelUrl: string;
-  onDebugNodesChange: (value: DebugNodeOption[]) => void;
-  onDebugSnapshotChange: (value: DebugSnapshot | null) => void;
-  pointerTarget: MutableRefObject<THREE.Vector2>;
-  resourcePath: string;
-}
-
-interface SceneModelProps {
-  binaryUrl: string;
-  debugConfig: SceneDebugConfig;
-  modelScale: number;
-  modelUrl: string;
-  onDebugNodesChange: (value: DebugNodeOption[]) => void;
-  onDebugSnapshotChange: (value: DebugSnapshot | null) => void;
-  pointerTarget: MutableRefObject<THREE.Vector2>;
-  resourcePath: string;
-}
-
-interface SceneOrbitControlsProps {
-  basePosition: SceneCameraPosition;
-  intensity: number;
-}
-
-interface DebugNodeOption {
-  key: string;
-  label: string;
-}
-
-interface DebugSnapshot {
-  activeNodeLabel: string;
-  localPosition: [number, number, number];
-  parentLabel: string | null;
-  rotation: [number, number, number];
-  scale: [number, number, number];
-  worldPosition: [number, number, number];
-}
-
-interface SceneDebugConfig {
-  enabled: boolean;
-  selectedNodeKey: string;
-  selectedOnlyMotion: boolean;
-  showAxesHelpers: boolean;
+  animationEnabled?: boolean;
 }
 
 interface GuiState {
-  activeNodeKey: string;
+  animationEnabled: boolean;
+  cameraMode: CameraMode;
+  cameraLocked: boolean;
   cameraX: number;
   cameraY: number;
   cameraZ: number;
-  local: string;
-  node: string;
-  parent: string;
-  rotate: string;
-  scale: string;
-  selectedOnlyMotion: boolean;
-  showAxesHelpers: boolean;
-  world: string;
+  castle: CastleTransform;
+  rocks: RocksOverlayTransform;
+  sky: SkyTransform;
+  towers: TowerTransform[];
 }
 
-type GuiController = ReturnType<GUI['add']>;
+interface CastleGuiControllers {
+  rotationX?: ReturnType<GUI['add']>;
+  rotationY?: ReturnType<GUI['add']>;
+  rotationZ?: ReturnType<GUI['add']>;
+  scale?: ReturnType<GUI['add']>;
+  x?: ReturnType<GUI['add']>;
+  y?: ReturnType<GUI['add']>;
+  z?: ReturnType<GUI['add']>;
+}
+
+interface RocksGuiControllers {
+  rotationX?: ReturnType<GUI['add']>;
+  rotationY?: ReturnType<GUI['add']>;
+  rotationZ?: ReturnType<GUI['add']>;
+  scale?: ReturnType<GUI['add']>;
+  x?: ReturnType<GUI['add']>;
+  y?: ReturnType<GUI['add']>;
+}
+
+interface SkyGuiControllers {
+  rotationX?: ReturnType<GUI['add']>;
+  rotationY?: ReturnType<GUI['add']>;
+  rotationZ?: ReturnType<GUI['add']>;
+  scale?: ReturnType<GUI['add']>;
+  x?: ReturnType<GUI['add']>;
+  y?: ReturnType<GUI['add']>;
+  z?: ReturnType<GUI['add']>;
+}
+
+interface TowerGuiControllers {
+  rotationX?: ReturnType<GUI['add']>;
+  rotationY?: ReturnType<GUI['add']>;
+  rotationZ?: ReturnType<GUI['add']>;
+  scale?: ReturnType<GUI['add']>;
+  visible?: ReturnType<GUI['add']>;
+  x?: ReturnType<GUI['add']>;
+  y?: ReturnType<GUI['add']>;
+  z?: ReturnType<GUI['add']>;
+}
 
 interface GuiControllers {
-  activeNode?: GuiController;
-  cameraX?: GuiController;
-  cameraY?: GuiController;
-  cameraZ?: GuiController;
-  readOnly: GuiController[];
-  selectedOnlyMotion?: GuiController;
-  showAxesHelpers?: GuiController;
+  animationEnabled?: ReturnType<GUI['add']>;
+  cameraMode?: ReturnType<GUI['add']>;
+  cameraLocked?: ReturnType<GUI['add']>;
+  cameraX?: ReturnType<GUI['add']>;
+  cameraY?: ReturnType<GUI['add']>;
+  cameraZ?: ReturnType<GUI['add']>;
+  castle: CastleGuiControllers;
+  rocks: RocksGuiControllers;
+  sky: SkyGuiControllers;
+  towers: TowerGuiControllers[];
 }
 
-const interactionSelector = '.frame';
-const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
-const sceneRootDebugKey = '__scene_root__';
-const theme = {
-  ambientLight: '#f6ebd9',
-  fillLight: '#ffcb8f',
-  keyLight: '#9eb5ff',
-  rimLight: '#6e88d8',
-} as const;
+interface CastleModelProps {
+  animationEnabled: boolean;
+  castleTransform: CastleTransform;
+  loadSessionId: number;
+  modelScale: number;
+  modelUrl: string;
+  onSceneReady: (loadSessionId: number, modelUrl: string) => void;
+  pointerTarget: MutableRefObject<THREE.Vector2>;
+  skyTransform: SkyTransform;
+  towerTransforms: TowerTransform[];
+}
 
-function coerceTextInput(value: unknown): string {
+interface CastleOrbitControlsProps {
+  basePosition: SceneCameraPosition;
+  intensity: number;
+  locked: boolean;
+  onCameraSnapshotChange: (snapshot: CameraSnapshot) => void;
+  target: SceneCameraPosition;
+}
+
+interface CastleSceneCameraProps {
+  mode: CameraMode;
+  position: SceneCameraPosition;
+  target: SceneCameraPosition;
+}
+
+interface PreparedSceneResult {
+  root: THREE.Group;
+  worldScale: number;
+}
+
+interface CameraSnapshot {
+  position: SceneCameraPosition;
+  target: SceneCameraPosition;
+}
+
+function toText(value: unknown) {
   if (typeof value === 'string') {
     return value;
   }
 
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => coerceTextInput(entry)).filter(Boolean).join('\n');
   }
 
   if (value && typeof value === 'object') {
@@ -144,104 +180,106 @@ function coerceTextInput(value: unknown): string {
   return '';
 }
 
-function coerceNumberInput(value: unknown, fallback: number) {
+function toNumber(value: unknown, fallback: number) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
   }
 
-  const parsedValue = Number(coerceTextInput(value).trim());
+  const parsedValue = Number(toText(value).trim());
 
   return Number.isFinite(parsedValue) ? parsedValue : fallback;
 }
 
-function clampCameraAxisValue(axis: keyof SceneCameraPosition, value: number) {
+function clampCameraAxis(axis: keyof SceneCameraPosition, value: number) {
   const control = castleCameraAxisControls[axis];
 
   return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function getModelFormat(modelUrl: string) {
-  const normalizedUrl = modelUrl.split('?')[0]?.split('#')[0]?.toLowerCase() ?? '';
+function clampTowerPositionAxis(axis: keyof SceneCameraPosition, value: number) {
+  const control = towerPositionAxisControls[axis];
 
-  if (normalizedUrl.endsWith('.gltf')) {
-    return 'gltf';
-  }
-
-  if (normalizedUrl.endsWith('.glb')) {
-    return 'glb';
-  }
-
-  return 'unknown';
+  return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function ensureTrailingSlash(value: string) {
-  return value.endsWith('/') ? value : `${value}/`;
+function clampTowerRotationAxis(axis: keyof SceneCameraPosition, value: number) {
+  const control = towerRotationAxisControls[axis];
+
+  return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function getDefaultResourcePath(modelUrl: string) {
-  try {
-    const parsedUrl = new URL(modelUrl, window.location.href);
-    const directoryPath = parsedUrl.pathname.slice(0, parsedUrl.pathname.lastIndexOf('/') + 1);
+function clampUniformScale(value: number) {
+  const control = uniformScaleControl;
 
-    return `${parsedUrl.origin}${directoryPath}`;
-  } catch {
-    const lastSlashIndex = modelUrl.lastIndexOf('/');
-
-    return lastSlashIndex === -1 ? '' : modelUrl.slice(0, lastSlashIndex + 1);
-  }
+  return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function getResourceDirectoryPath(resourcePath: string) {
-  const trimmedPath = resourcePath.trim();
+function clampOverlayOffset(axis: 'x' | 'y', value: number) {
+  const control = overlayOffsetControls[axis];
 
-  if (!trimmedPath) {
-    return '';
-  }
-
-  try {
-    const parsedUrl = new URL(trimmedPath, window.location.href);
-    const pathname = parsedUrl.pathname;
-    const lastSegment = pathname.split('/').pop() ?? '';
-
-    if (lastSegment.includes('.')) {
-      const directoryPath = pathname.slice(0, pathname.lastIndexOf('/') + 1);
-
-      return `${parsedUrl.origin}${directoryPath}`;
-    }
-
-    return ensureTrailingSlash(trimmedPath);
-  } catch {
-    const normalizedPath = trimmedPath.replace(/[?#].*$/, '');
-    const lastSlashIndex = normalizedPath.lastIndexOf('/');
-    const lastSegment = lastSlashIndex >= 0 ? normalizedPath.slice(lastSlashIndex + 1) : normalizedPath;
-
-    if (lastSegment.includes('.')) {
-      return trimmedPath.slice(0, trimmedPath.lastIndexOf('/') + 1);
-    }
-
-    return ensureTrailingSlash(trimmedPath);
-  }
+  return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function normalizeAssetKey(value: string) {
-  const withoutQuery = value.split('?')[0]?.split('#')[0] ?? '';
-  const lastSlashIndex = withoutQuery.lastIndexOf('/');
-  const fileName = lastSlashIndex >= 0 ? withoutQuery.slice(lastSlashIndex + 1) : withoutQuery;
-
-  try {
-    return decodeURIComponent(fileName).toLowerCase();
-  } catch {
-    return fileName.toLowerCase();
-  }
-}
-
-function getViewportAtDistance(distance: number, fov: number, aspectRatio: number) {
-  const viewportHeight = 2 * Math.tan(THREE.MathUtils.degToRad(fov) / 2) * distance;
-
+function normalizeCastleTransform(transform: CastleTransform): CastleTransform {
   return {
-    height: viewportHeight,
-    width: viewportHeight * aspectRatio,
+    rotationX: clampTowerRotationAxis('x', transform.rotationX),
+    rotationY: clampTowerRotationAxis('y', transform.rotationY),
+    rotationZ: clampTowerRotationAxis('z', transform.rotationZ),
+    scale: clampUniformScale(transform.scale),
+    x: clampTowerPositionAxis('x', transform.x),
+    y: clampTowerPositionAxis('y', transform.y),
+    z: clampTowerPositionAxis('z', transform.z),
   };
+}
+
+function normalizeTowerTransform(tower: TowerTransform): TowerTransform {
+  return {
+    rotationX: clampTowerRotationAxis('x', tower.rotationX),
+    rotationY: clampTowerRotationAxis('y', tower.rotationY),
+    rotationZ: clampTowerRotationAxis('z', tower.rotationZ),
+    scale: clampUniformScale(tower.scale),
+    visible: tower.visible,
+    x: clampTowerPositionAxis('x', tower.x),
+    y: clampTowerPositionAxis('y', tower.y),
+    z: clampTowerPositionAxis('z', tower.z),
+  };
+}
+
+function normalizeSkyTransform(transform: SkyTransform): SkyTransform {
+  return {
+    rotationX: clampTowerRotationAxis('x', transform.rotationX),
+    rotationY: clampTowerRotationAxis('y', transform.rotationY),
+    rotationZ: clampTowerRotationAxis('z', transform.rotationZ),
+    scale: clampUniformScale(transform.scale),
+    x: clampTowerPositionAxis('x', transform.x),
+    y: clampTowerPositionAxis('y', transform.y),
+    z: clampTowerPositionAxis('z', transform.z),
+  };
+}
+
+function normalizeRocksOverlayTransform(transform: RocksOverlayTransform): RocksOverlayTransform {
+  return {
+    rotationX: clampTowerRotationAxis('x', transform.rotationX),
+    rotationY: clampTowerRotationAxis('y', transform.rotationY),
+    rotationZ: clampTowerRotationAxis('z', transform.rotationZ),
+    scale: clampUniformScale(transform.scale),
+    x: clampOverlayOffset('x', transform.x),
+    y: clampOverlayOffset('y', transform.y),
+  };
+}
+
+function cloneTowerTransforms(towers: readonly TowerTransform[]) {
+  return towers.map((tower) => normalizeTowerTransform({ ...tower }));
+}
+
+function getOrthographicZoom(position: SceneCameraPosition, target: SceneCameraPosition, viewportHeight: number) {
+  const cameraVector = new THREE.Vector3(position.x, position.y, position.z);
+  const targetVector = new THREE.Vector3(target.x, target.y, target.z);
+  const cameraDistance = Math.max(cameraVector.distanceTo(targetVector), 0.5);
+  const visibleHeight =
+    2 * cameraDistance * Math.tan(THREE.MathUtils.degToRad(castlePerspectiveCamera.fov / 2));
+
+  return THREE.MathUtils.clamp(viewportHeight / Math.max(visibleHeight, 0.01), 10, 500);
 }
 
 function shapePointerAxis(value: number) {
@@ -250,163 +288,219 @@ function shapePointerAxis(value: number) {
   return Math.sign(clampedValue) * Math.pow(Math.abs(clampedValue), 1.2);
 }
 
-function getObjectLabel(object: THREE.Object3D) {
-  const trimmedName = object.name.trim();
-
-  return trimmedName || object.type;
-}
-
-function getDebugNodeKey(object: THREE.Object3D, sceneRoot: THREE.Object3D) {
-  if (object === sceneRoot) {
-    return sceneRootDebugKey;
-  }
-
-  const pathParts: string[] = [];
-  let current: THREE.Object3D | null = object;
-
-  while (current && current !== sceneRoot) {
-    pathParts.unshift(getObjectLabel(current));
-    current = current.parent;
-  }
-
-  return pathParts.join(' / ');
-}
-
-function roundVector(values: THREE.Vector3 | THREE.Euler): [number, number, number] {
-  return [values.x, values.y, values.z].map((value) => Number(value.toFixed(3))) as [
-    number,
-    number,
-    number,
-  ];
-}
-
-function resetObjectTransform(target: THREE.Object3D | null) {
-  if (!target) {
-    return;
-  }
-
-  const basePosition = target.userData.__castleBasePosition as THREE.Vector3 | undefined;
-  const baseRotation = target.userData.__castleBaseRotation as THREE.Euler | undefined;
-
-  if (basePosition) {
-    target.position.copy(basePosition);
-  }
-
-  if (baseRotation) {
-    target.rotation.set(baseRotation.x, baseRotation.y, baseRotation.z, baseRotation.order);
-  }
-}
-
-function createDebugSnapshot(activeNode: THREE.Object3D): DebugSnapshot {
-  const worldPosition = new THREE.Vector3();
-
-  activeNode.getWorldPosition(worldPosition);
+function getViewportAtDistance(distance: number, fov: number, aspectRatio: number) {
+  const height = 2 * Math.tan(THREE.MathUtils.degToRad(fov) / 2) * distance;
 
   return {
-    activeNodeLabel: getObjectLabel(activeNode),
-    localPosition: roundVector(activeNode.position),
-    parentLabel: activeNode.parent ? getObjectLabel(activeNode.parent) : null,
-    rotation: roundVector(activeNode.rotation),
-    scale: roundVector(activeNode.scale),
-    worldPosition: roundVector(worldPosition),
+    height,
+    width: height * aspectRatio,
   };
 }
 
-function renderVector(label: string, value: [number, number, number]) {
-  return `${label}: ${value.join(', ')}`;
+function prepareSceneMaterial(material: THREE.Material) {
+  const clonedMaterial = material.clone();
+
+  if (
+    clonedMaterial instanceof THREE.MeshBasicMaterial ||
+    clonedMaterial instanceof THREE.MeshPhongMaterial ||
+    clonedMaterial instanceof THREE.MeshPhysicalMaterial ||
+    clonedMaterial instanceof THREE.MeshStandardMaterial
+  ) {
+    clonedMaterial.side = THREE.FrontSide;
+    clonedMaterial.needsUpdate = true;
+  }
+
+  return clonedMaterial;
 }
 
-function applyDebugSnapshotToGuiState(guiState: GuiState, debugSnapshot: DebugSnapshot | null) {
-  guiState.node = debugSnapshot?.activeNodeLabel ?? 'Waiting for scene data...';
-  guiState.parent = debugSnapshot?.parentLabel ?? 'None';
-  guiState.local = debugSnapshot ? renderVector('Local', debugSnapshot.localPosition) : 'Local: -';
-  guiState.world = debugSnapshot ? renderVector('World', debugSnapshot.worldPosition) : 'World: -';
-  guiState.rotate = debugSnapshot ? renderVector('Rotate', debugSnapshot.rotation) : 'Rotate: -';
-  guiState.scale = debugSnapshot ? renderVector('Scale', debugSnapshot.scale) : 'Scale: -';
+function prepareSceneMaterials(scene: THREE.Object3D) {
+  const root = scene.clone(true) as THREE.Group;
+
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+
+    if (Array.isArray(child.material)) {
+      child.material = child.material.map((material) => prepareSceneMaterial(material));
+      return;
+    }
+
+    child.material = prepareSceneMaterial(child.material);
+  });
+
+  return root;
+}
+
+function prepareSkyTexture(texture: THREE.Texture) {
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+
+  return texture;
+}
+
+function buildPreparedCastleScene(
+  scene: THREE.Object3D,
+  camera: THREE.Camera,
+  aspectRatio: number,
+  modelScale: number,
+): PreparedSceneResult {
+  const root = prepareSceneMaterials(scene);
+  const bounds = new THREE.Box3().setFromObject(root);
+  const center = bounds.getCenter(new THREE.Vector3());
+  const size = bounds.getSize(new THREE.Vector3());
+  const fov =
+    camera instanceof THREE.PerspectiveCamera ? camera.fov : castlePerspectiveCamera.fov;
+  const viewport = getViewportAtDistance(castlePerspectiveCamera.position.z, fov, aspectRatio);
+  const worldScale =
+    Math.min(
+      viewport.width / Math.max(size.x, 0.001),
+      viewport.height / Math.max(size.y, 0.001),
+    ) *
+    modelScale *
+    0.92;
+
+  root.scale.setScalar(worldScale);
+  root.position.set(-center.x * worldScale, -center.y * worldScale, -center.z * worldScale);
+
+  return { root, worldScale };
+}
+
+function buildPreparedTowerScene(scene: THREE.Object3D, worldScale: number) {
+  const root = prepareSceneMaterials(scene);
+  const bounds = new THREE.Box3().setFromObject(root);
+  const center = bounds.getCenter(new THREE.Vector3());
+  const baseY = bounds.min.y;
+
+  root.scale.setScalar(worldScale);
+  root.position.set(-center.x * worldScale, -baseY * worldScale, -center.z * worldScale);
+
+  return root;
 }
 
 export function CastleScene({
   modelUrl = '',
-  resourcePath = '',
-  binaryUrl = '',
   modelScale = 1,
   cameraIntensity = 0.35,
   cameraX = castlePerspectiveCamera.position.x,
   cameraY = castlePerspectiveCamera.position.y,
   cameraZ = castlePerspectiveCamera.position.z,
   showGui = true,
-  showAxesHelpers = true,
-  selectedNodeName = '',
-  selectedNodeOnlyMotion = false,
+  animationEnabled = true,
 }: CastleSceneProps) {
   const sectionRef = useRef<HTMLElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
-  const isBrowser = typeof window !== 'undefined';
-  const resolvedModelUrl = coerceTextInput(modelUrl).trim();
-  const resolvedResourcePath = coerceTextInput(resourcePath).trim();
-  const resolvedBinaryUrl = coerceTextInput(binaryUrl).trim();
-  const resolvedSelectedNodeName = coerceTextInput(selectedNodeName).trim();
-  const [nodeOptions, setNodeOptions] = useState<DebugNodeOption[]>([
-    { key: sceneRootDebugKey, label: 'Scene Root' },
-  ]);
-  const [activeNodeKey, setActiveNodeKey] = useState(resolvedSelectedNodeName || sceneRootDebugKey);
-  const [axesEnabled, setAxesEnabled] = useState(showAxesHelpers);
-  const [selectedOnlyMotion, setSelectedOnlyMotion] = useState(selectedNodeOnlyMotion);
-  const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
-    x: clampCameraAxisValue('x', coerceNumberInput(cameraX, castlePerspectiveCamera.position.x)),
-    y: clampCameraAxisValue('y', coerceNumberInput(cameraY, castlePerspectiveCamera.position.y)),
-    z: clampCameraAxisValue('z', coerceNumberInput(cameraZ, castlePerspectiveCamera.position.z)),
-  });
-  const [debugSnapshot, setDebugSnapshot] = useState<DebugSnapshot | null>(null);
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
-  const guiControllersRef = useRef<GuiControllers>({ readOnly: [] });
+  const guiControllersRef = useRef<GuiControllers>({ castle: {}, rocks: {}, sky: {}, towers: [] });
+  const loadSessionRef = useRef(0);
+  const loadStartTimeRef = useRef(0);
+  const completedLoadSessionRef = useRef(0);
+  const cameraSnapshotRef = useRef<CameraSnapshot>({
+    position: { ...castlePerspectiveCamera.position },
+    target: { ...castlePerspectiveCamera.lookAt },
+  });
 
-  useEffect(() => {
-    setActiveNodeKey(resolvedSelectedNodeName || sceneRootDebugKey);
-  }, [resolvedSelectedNodeName]);
-
-  useEffect(() => {
-    setAxesEnabled(showAxesHelpers);
-  }, [showAxesHelpers]);
-
-  useEffect(() => {
-    setSelectedOnlyMotion(selectedNodeOnlyMotion);
-  }, [selectedNodeOnlyMotion]);
+  const resolvedModelUrl = toText(modelUrl).trim() || defaultModelUrl;
+  const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
+    x: clampCameraAxis('x', toNumber(cameraX, castlePerspectiveCamera.position.x)),
+    y: clampCameraAxis('y', toNumber(cameraY, castlePerspectiveCamera.position.y)),
+    z: clampCameraAxis('z', toNumber(cameraZ, castlePerspectiveCamera.position.z)),
+  });
+  const [cameraMode, setCameraMode] = useState<CameraMode>('Perspective');
+  const [cameraTarget, setCameraTarget] = useState<SceneCameraPosition>({
+    ...castlePerspectiveCamera.lookAt,
+  });
+  const [cameraLocked, setCameraLocked] = useState(false);
+  const [animationActive, setAnimationActive] = useState(animationEnabled);
+  const [castleTransform, setCastleTransform] = useState<CastleTransform>(() =>
+    normalizeCastleTransform({ ...castleTransformDefaults }),
+  );
+  const [rocksTransform, setRocksTransform] = useState<RocksOverlayTransform>(() =>
+    normalizeRocksOverlayTransform({ ...rocksOverlayDefaults }),
+  );
+  const [skyTransform, setSkyTransform] = useState<SkyTransform>(() =>
+    normalizeSkyTransform({ ...skyTransformDefaults }),
+  );
+  const [towerTransforms, setTowerTransforms] = useState<TowerTransform[]>(() =>
+    cloneTowerTransforms(castleTowerDefaults),
+  );
 
   useEffect(() => {
     setCameraPosition({
-      x: clampCameraAxisValue('x', coerceNumberInput(cameraX, castlePerspectiveCamera.position.x)),
-      y: clampCameraAxisValue('y', coerceNumberInput(cameraY, castlePerspectiveCamera.position.y)),
-      z: clampCameraAxisValue('z', coerceNumberInput(cameraZ, castlePerspectiveCamera.position.z)),
+      x: clampCameraAxis('x', toNumber(cameraX, castlePerspectiveCamera.position.x)),
+      y: clampCameraAxis('y', toNumber(cameraY, castlePerspectiveCamera.position.y)),
+      z: clampCameraAxis('z', toNumber(cameraZ, castlePerspectiveCamera.position.z)),
     });
   }, [cameraX, cameraY, cameraZ]);
 
   useEffect(() => {
-    if (!nodeOptions.some((option) => option.key === activeNodeKey)) {
-      setActiveNodeKey(sceneRootDebugKey);
-    }
-  }, [activeNodeKey, nodeOptions]);
+    setAnimationActive(animationEnabled);
+  }, [animationEnabled]);
 
   useEffect(() => {
-    if (!isBrowser || !sectionRef.current) {
-      return undefined;
+    cameraSnapshotRef.current = {
+      position: { ...cameraPosition },
+      target: { ...cameraTarget },
+    };
+  }, [cameraPosition, cameraTarget]);
+
+  useEffect(() => {
+    useGLTF.preload(resolvedModelUrl, dracoDecoderPath);
+  }, [resolvedModelUrl]);
+
+  useEffect(() => {
+    loadSessionRef.current += 1;
+    loadStartTimeRef.current = performance.now();
+
+    console.log('[CastleScene] load-start', {
+      loadSessionId: loadSessionRef.current,
+      modelUrl: resolvedModelUrl,
+      startedAt: loadStartTimeRef.current,
+    });
+  }, [resolvedModelUrl]);
+
+  const handleSceneReady = (loadSessionId: number, readyModelUrl: string) => {
+    if (loadSessionId !== loadSessionRef.current) {
+      return;
     }
 
-    const sectionElement = sectionRef.current;
-    const closestFrame = sectionElement.closest(interactionSelector);
-    const interactionElement =
-      (closestFrame instanceof HTMLElement
-        ? closestFrame
-        : document.querySelector(interactionSelector)) ?? sectionElement;
+    if (completedLoadSessionRef.current === loadSessionId) {
+      return;
+    }
+
+    completedLoadSessionRef.current = loadSessionId;
+
+    const completedAt = performance.now();
+    const durationMs = Number((completedAt - loadStartTimeRef.current).toFixed(2));
+
+    console.log('[CastleScene] load-complete', {
+      completedAt,
+      durationMs,
+      loadSessionId,
+      modelUrl: readyModelUrl,
+    });
+  };
+
+  useEffect(() => {
+    const element = sectionRef.current;
+
+    if (!element) {
+      return undefined;
+    }
 
     const resetPointer = () => {
       pointerTarget.current.set(0, 0);
     };
 
-    const handlePointerMove = (event: globalThis.PointerEvent) => {
-      const bounds = interactionElement.getBoundingClientRect();
+    const updatePointer = (event: PointerEvent) => {
+      const bounds = element.getBoundingClientRect();
 
       if (!bounds.width || !bounds.height) {
         resetPointer();
@@ -436,206 +530,686 @@ export function CastleScene({
       }
     };
 
-    window.addEventListener('pointermove', handlePointerMove, { passive: true });
-    window.addEventListener('pointerdown', handlePointerMove, { passive: true });
+    element.addEventListener('pointermove', updatePointer, { passive: true });
+    element.addEventListener('pointerleave', resetPointer);
     window.addEventListener('blur', resetPointer);
-    interactionElement.addEventListener('pointerleave', resetPointer);
-    interactionElement.addEventListener('pointercancel', resetPointer);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerdown', handlePointerMove);
+      element.removeEventListener('pointermove', updatePointer);
+      element.removeEventListener('pointerleave', resetPointer);
       window.removeEventListener('blur', resetPointer);
-      interactionElement.removeEventListener('pointerleave', resetPointer);
-      interactionElement.removeEventListener('pointercancel', resetPointer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [isBrowser]);
-
-  const debugConfig = useMemo<SceneDebugConfig>(
-    () => ({
-      enabled: showGui,
-      selectedNodeKey: activeNodeKey,
-      selectedOnlyMotion,
-      showAxesHelpers: axesEnabled,
-    }),
-    [activeNodeKey, axesEnabled, selectedOnlyMotion, showGui],
-  );
+  }, []);
 
   useEffect(() => {
     if (!showGui || !guiRootRef.current) {
       guiRef.current?.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { readOnly: [] };
+      guiControllersRef.current = { castle: {}, rocks: {}, sky: {}, towers: [] };
       return undefined;
     }
 
     guiRootRef.current.replaceChildren();
 
     const guiState: GuiState = {
-      activeNodeKey,
+      animationEnabled: animationActive,
+      cameraMode,
+      cameraLocked,
       cameraX: cameraPosition.x,
       cameraY: cameraPosition.y,
       cameraZ: cameraPosition.z,
-      local: '',
-      node: '',
-      parent: '',
-      rotate: '',
-      scale: '',
-      selectedOnlyMotion,
-      showAxesHelpers: axesEnabled,
-      world: '',
+      castle: normalizeCastleTransform({ ...castleTransform }),
+      rocks: normalizeRocksOverlayTransform({ ...rocksTransform }),
+      sky: normalizeSkyTransform({ ...skyTransform }),
+      towers: cloneTowerTransforms(towerTransforms),
     };
 
-    applyDebugSnapshotToGuiState(guiState, debugSnapshot);
-
     const gui = new GUI({ autoPlace: false, title: 'Castle GUI', width: 320 });
-    const sceneFolder = gui.addFolder('Scene');
     const cameraFolder = gui.addFolder('Camera');
-    const nodeFolder = gui.addFolder('Selected Node');
-    const nodeOptionsMap = Object.fromEntries(nodeOptions.map((option) => [option.label, option.key]));
+    const animationFolder = gui.addFolder('Animation');
+    const castleFolder = gui.addFolder('Castle');
+    const rocksFolder = gui.addFolder('Rocks');
+    const skyFolder = gui.addFolder('Sky');
 
     guiRootRef.current.appendChild(gui.domElement);
     guiRef.current = gui;
     guiStateRef.current = guiState;
 
-    const controllers: GuiControllers = {
-      readOnly: [],
+    guiControllersRef.current = {
+      animationEnabled: animationFolder
+        .add(guiState, 'animationEnabled')
+        .name('Enable Motion')
+        .onChange((value: boolean) => {
+          setAnimationActive(Boolean(value));
+        }),
+      cameraMode: cameraFolder
+        .add(guiState, 'cameraMode', cameraModes)
+        .name('Camera Type')
+        .onChange((value: string) => {
+          setCameraMode(value === 'Orthographic' ? 'Orthographic' : 'Perspective');
+        }),
+      cameraLocked: cameraFolder
+        .add(guiState, 'cameraLocked')
+        .name('Lock Orbit')
+        .onChange((value: boolean) => {
+          if (value) {
+            const snapshot = cameraSnapshotRef.current;
+
+            setCameraPosition({ ...snapshot.position });
+            setCameraTarget({ ...snapshot.target });
+            setCameraLocked(true);
+            return;
+          }
+
+          setCameraLocked(false);
+        }),
+      cameraX: cameraFolder
+        .add(
+          guiState,
+          'cameraX',
+          castleCameraAxisControls.x.min,
+          castleCameraAxisControls.x.max,
+          castleCameraAxisControls.x.step,
+        )
+        .name(castleCameraAxisControls.x.label)
+        .onChange((value: number) => {
+          setCameraPosition((currentValue) => ({
+            ...currentValue,
+            x: clampCameraAxis('x', Number(value)),
+          }));
+        }),
+      cameraY: cameraFolder
+        .add(
+          guiState,
+          'cameraY',
+          castleCameraAxisControls.y.min,
+          castleCameraAxisControls.y.max,
+          castleCameraAxisControls.y.step,
+        )
+        .name(castleCameraAxisControls.y.label)
+        .onChange((value: number) => {
+          setCameraPosition((currentValue) => ({
+            ...currentValue,
+            y: clampCameraAxis('y', Number(value)),
+          }));
+        }),
+      cameraZ: cameraFolder
+        .add(
+          guiState,
+          'cameraZ',
+          castleCameraAxisControls.z.min,
+          castleCameraAxisControls.z.max,
+          castleCameraAxisControls.z.step,
+        )
+        .name(castleCameraAxisControls.z.label)
+        .onChange((value: number) => {
+          setCameraPosition((currentValue) => ({
+            ...currentValue,
+            z: clampCameraAxis('z', Number(value)),
+          }));
+        }),
+      castle: {
+        x: castleFolder
+          .add(
+            guiState.castle,
+            'x',
+            towerPositionAxisControls.x.min,
+            towerPositionAxisControls.x.max,
+            towerPositionAxisControls.x.step,
+          )
+          .name(towerPositionAxisControls.x.label)
+          .onChange((value: number) => {
+            setCastleTransform((currentValue) =>
+              normalizeCastleTransform({
+                ...currentValue,
+                x: Number(value),
+              }),
+            );
+          }),
+        y: castleFolder
+          .add(
+            guiState.castle,
+            'y',
+            towerPositionAxisControls.y.min,
+            towerPositionAxisControls.y.max,
+            towerPositionAxisControls.y.step,
+          )
+          .name(towerPositionAxisControls.y.label)
+          .onChange((value: number) => {
+            setCastleTransform((currentValue) =>
+              normalizeCastleTransform({
+                ...currentValue,
+                y: Number(value),
+              }),
+            );
+          }),
+        z: castleFolder
+          .add(
+            guiState.castle,
+            'z',
+            towerPositionAxisControls.z.min,
+            towerPositionAxisControls.z.max,
+            towerPositionAxisControls.z.step,
+          )
+          .name(towerPositionAxisControls.z.label)
+          .onChange((value: number) => {
+            setCastleTransform((currentValue) =>
+              normalizeCastleTransform({
+                ...currentValue,
+                z: Number(value),
+              }),
+            );
+          }),
+        rotationX: castleFolder
+          .add(
+            guiState.castle,
+            'rotationX',
+            towerRotationAxisControls.x.min,
+            towerRotationAxisControls.x.max,
+            towerRotationAxisControls.x.step,
+          )
+          .name(towerRotationAxisControls.x.label)
+          .onChange((value: number) => {
+            setCastleTransform((currentValue) =>
+              normalizeCastleTransform({
+                ...currentValue,
+                rotationX: Number(value),
+              }),
+            );
+          }),
+        rotationY: castleFolder
+          .add(
+            guiState.castle,
+            'rotationY',
+            towerRotationAxisControls.y.min,
+            towerRotationAxisControls.y.max,
+            towerRotationAxisControls.y.step,
+          )
+          .name(towerRotationAxisControls.y.label)
+          .onChange((value: number) => {
+            setCastleTransform((currentValue) =>
+              normalizeCastleTransform({
+                ...currentValue,
+                rotationY: Number(value),
+              }),
+            );
+          }),
+        rotationZ: castleFolder
+          .add(
+            guiState.castle,
+            'rotationZ',
+            towerRotationAxisControls.z.min,
+            towerRotationAxisControls.z.max,
+            towerRotationAxisControls.z.step,
+          )
+          .name(towerRotationAxisControls.z.label)
+          .onChange((value: number) => {
+            setCastleTransform((currentValue) =>
+              normalizeCastleTransform({
+                ...currentValue,
+                rotationZ: Number(value),
+              }),
+            );
+          }),
+        scale: castleFolder
+          .add(
+            guiState.castle,
+            'scale',
+            uniformScaleControl.min,
+            uniformScaleControl.max,
+            uniformScaleControl.step,
+          )
+          .name(uniformScaleControl.label)
+          .onChange((value: number) => {
+            setCastleTransform((currentValue) =>
+              normalizeCastleTransform({
+                ...currentValue,
+                scale: Number(value),
+              }),
+            );
+          }),
+      },
+      rocks: {
+        x: rocksFolder
+          .add(
+            guiState.rocks,
+            'x',
+            overlayOffsetControls.x.min,
+            overlayOffsetControls.x.max,
+            overlayOffsetControls.x.step,
+          )
+          .name(overlayOffsetControls.x.label)
+          .onChange((value: number) => {
+            setRocksTransform((currentValue) =>
+              normalizeRocksOverlayTransform({
+                ...currentValue,
+                x: Number(value),
+              }),
+            );
+          }),
+        y: rocksFolder
+          .add(
+            guiState.rocks,
+            'y',
+            overlayOffsetControls.y.min,
+            overlayOffsetControls.y.max,
+            overlayOffsetControls.y.step,
+          )
+          .name(overlayOffsetControls.y.label)
+          .onChange((value: number) => {
+            setRocksTransform((currentValue) =>
+              normalizeRocksOverlayTransform({
+                ...currentValue,
+                y: Number(value),
+              }),
+            );
+          }),
+        rotationX: rocksFolder
+          .add(
+            guiState.rocks,
+            'rotationX',
+            towerRotationAxisControls.x.min,
+            towerRotationAxisControls.x.max,
+            towerRotationAxisControls.x.step,
+          )
+          .name(towerRotationAxisControls.x.label)
+          .onChange((value: number) => {
+            setRocksTransform((currentValue) =>
+              normalizeRocksOverlayTransform({
+                ...currentValue,
+                rotationX: Number(value),
+              }),
+            );
+          }),
+        rotationY: rocksFolder
+          .add(
+            guiState.rocks,
+            'rotationY',
+            towerRotationAxisControls.y.min,
+            towerRotationAxisControls.y.max,
+            towerRotationAxisControls.y.step,
+          )
+          .name(towerRotationAxisControls.y.label)
+          .onChange((value: number) => {
+            setRocksTransform((currentValue) =>
+              normalizeRocksOverlayTransform({
+                ...currentValue,
+                rotationY: Number(value),
+              }),
+            );
+          }),
+        rotationZ: rocksFolder
+          .add(
+            guiState.rocks,
+            'rotationZ',
+            towerRotationAxisControls.z.min,
+            towerRotationAxisControls.z.max,
+            towerRotationAxisControls.z.step,
+          )
+          .name(towerRotationAxisControls.z.label)
+          .onChange((value: number) => {
+            setRocksTransform((currentValue) =>
+              normalizeRocksOverlayTransform({
+                ...currentValue,
+                rotationZ: Number(value),
+              }),
+            );
+          }),
+        scale: rocksFolder
+          .add(
+            guiState.rocks,
+            'scale',
+            uniformScaleControl.min,
+            uniformScaleControl.max,
+            uniformScaleControl.step,
+          )
+          .name(uniformScaleControl.label)
+          .onChange((value: number) => {
+            setRocksTransform((currentValue) =>
+              normalizeRocksOverlayTransform({
+                ...currentValue,
+                scale: Number(value),
+              }),
+            );
+          }),
+      },
+      sky: {
+        scale: skyFolder
+          .add(
+            guiState.sky,
+            'scale',
+            uniformScaleControl.min,
+            uniformScaleControl.max,
+            uniformScaleControl.step,
+          )
+          .name(uniformScaleControl.label)
+          .onChange((value: number) => {
+            setSkyTransform((currentValue) =>
+              normalizeSkyTransform({
+                ...currentValue,
+                scale: Number(value),
+              }),
+            );
+          }),
+        x: skyFolder
+          .add(
+            guiState.sky,
+            'x',
+            towerPositionAxisControls.x.min,
+            towerPositionAxisControls.x.max,
+            towerPositionAxisControls.x.step,
+          )
+          .name(towerPositionAxisControls.x.label)
+          .onChange((value: number) => {
+            setSkyTransform((currentValue) =>
+              normalizeSkyTransform({
+                ...currentValue,
+                x: Number(value),
+              }),
+            );
+          }),
+        y: skyFolder
+          .add(
+            guiState.sky,
+            'y',
+            towerPositionAxisControls.y.min,
+            towerPositionAxisControls.y.max,
+            towerPositionAxisControls.y.step,
+          )
+          .name(towerPositionAxisControls.y.label)
+          .onChange((value: number) => {
+            setSkyTransform((currentValue) =>
+              normalizeSkyTransform({
+                ...currentValue,
+                y: Number(value),
+              }),
+            );
+          }),
+        z: skyFolder
+          .add(
+            guiState.sky,
+            'z',
+            towerPositionAxisControls.z.min,
+            towerPositionAxisControls.z.max,
+            towerPositionAxisControls.z.step,
+          )
+          .name(towerPositionAxisControls.z.label)
+          .onChange((value: number) => {
+            setSkyTransform((currentValue) =>
+              normalizeSkyTransform({
+                ...currentValue,
+                z: Number(value),
+              }),
+            );
+          }),
+        rotationX: skyFolder
+          .add(
+            guiState.sky,
+            'rotationX',
+            towerRotationAxisControls.x.min,
+            towerRotationAxisControls.x.max,
+            towerRotationAxisControls.x.step,
+          )
+          .name(towerRotationAxisControls.x.label)
+          .onChange((value: number) => {
+            setSkyTransform((currentValue) =>
+              normalizeSkyTransform({
+                ...currentValue,
+                rotationX: Number(value),
+              }),
+            );
+          }),
+        rotationY: skyFolder
+          .add(
+            guiState.sky,
+            'rotationY',
+            towerRotationAxisControls.y.min,
+            towerRotationAxisControls.y.max,
+            towerRotationAxisControls.y.step,
+          )
+          .name(towerRotationAxisControls.y.label)
+          .onChange((value: number) => {
+            setSkyTransform((currentValue) =>
+              normalizeSkyTransform({
+                ...currentValue,
+                rotationY: Number(value),
+              }),
+            );
+          }),
+        rotationZ: skyFolder
+          .add(
+            guiState.sky,
+            'rotationZ',
+            towerRotationAxisControls.z.min,
+            towerRotationAxisControls.z.max,
+            towerRotationAxisControls.z.step,
+          )
+          .name(towerRotationAxisControls.z.label)
+          .onChange((value: number) => {
+            setSkyTransform((currentValue) =>
+              normalizeSkyTransform({
+                ...currentValue,
+                rotationZ: Number(value),
+              }),
+            );
+          }),
+      },
+      towers: [],
     };
 
-    controllers.activeNode = sceneFolder
-      .add(guiState, 'activeNodeKey', nodeOptionsMap)
-      .name('Active Node')
-      .onChange((value: string) => {
-        setActiveNodeKey(String(value));
-      });
-    controllers.showAxesHelpers = sceneFolder
-      .add(guiState, 'showAxesHelpers')
-      .name('Show Axes')
-      .onChange((value: boolean) => {
-        setAxesEnabled(Boolean(value));
-      });
-    controllers.selectedOnlyMotion = sceneFolder
-      .add(guiState, 'selectedOnlyMotion')
-      .name('Selected Motion')
-      .onChange((value: boolean) => {
-        setSelectedOnlyMotion(Boolean(value));
-      });
-    controllers.cameraX = cameraFolder
-      .add(
-        guiState,
-        'cameraX',
-        castleCameraAxisControls.x.min,
-        castleCameraAxisControls.x.max,
-        castleCameraAxisControls.x.step,
-      )
-      .name(castleCameraAxisControls.x.label)
-      .onChange((value: number) => {
-        setCameraPosition((currentValue) => ({
-          ...currentValue,
-          x: clampCameraAxisValue('x', Number(value)),
-        }));
-      });
-    controllers.cameraY = cameraFolder
-      .add(
-        guiState,
-        'cameraY',
-        castleCameraAxisControls.y.min,
-        castleCameraAxisControls.y.max,
-        castleCameraAxisControls.y.step,
-      )
-      .name(castleCameraAxisControls.y.label)
-      .onChange((value: number) => {
-        setCameraPosition((currentValue) => ({
-          ...currentValue,
-          y: clampCameraAxisValue('y', Number(value)),
-        }));
-      });
-    controllers.cameraZ = cameraFolder
-      .add(
-        guiState,
-        'cameraZ',
-        castleCameraAxisControls.z.min,
-        castleCameraAxisControls.z.max,
-        castleCameraAxisControls.z.step,
-      )
-      .name(castleCameraAxisControls.z.label)
-      .onChange((value: number) => {
-        setCameraPosition((currentValue) => ({
-          ...currentValue,
-          z: clampCameraAxisValue('z', Number(value)),
-        }));
-      });
+    towerTransforms.forEach((_, index) => {
+      const towerFolder = gui.addFolder(`Tower ${index + 1}`);
+      const towerState = guiState.towers[index];
+
+      const updateTower = (nextValues: Partial<TowerTransform>) => {
+        setTowerTransforms((currentValue) =>
+          currentValue.map((tower, towerIndex) =>
+            towerIndex === index
+              ? normalizeTowerTransform({
+                  ...tower,
+                  ...nextValues,
+                })
+              : tower,
+          ),
+        );
+      };
+
+      guiControllersRef.current.towers[index] = {
+        visible:
+          index > 0
+            ? towerFolder
+                .add(towerState, 'visible')
+                .name('Visible')
+                .onChange((value: boolean) => {
+                  updateTower({ visible: Boolean(value) });
+                })
+            : undefined,
+        x: towerFolder
+          .add(
+            towerState,
+            'x',
+            towerPositionAxisControls.x.min,
+            towerPositionAxisControls.x.max,
+            towerPositionAxisControls.x.step,
+          )
+          .name(towerPositionAxisControls.x.label)
+          .onChange((value: number) => {
+            updateTower({ x: clampTowerPositionAxis('x', Number(value)) });
+          }),
+        y: towerFolder
+          .add(
+            towerState,
+            'y',
+            towerPositionAxisControls.y.min,
+            towerPositionAxisControls.y.max,
+            towerPositionAxisControls.y.step,
+          )
+          .name(towerPositionAxisControls.y.label)
+          .onChange((value: number) => {
+            updateTower({ y: clampTowerPositionAxis('y', Number(value)) });
+          }),
+        z: towerFolder
+          .add(
+            towerState,
+            'z',
+            towerPositionAxisControls.z.min,
+            towerPositionAxisControls.z.max,
+            towerPositionAxisControls.z.step,
+          )
+          .name(towerPositionAxisControls.z.label)
+          .onChange((value: number) => {
+            updateTower({ z: clampTowerPositionAxis('z', Number(value)) });
+          }),
+        rotationX: towerFolder
+          .add(
+            towerState,
+            'rotationX',
+            towerRotationAxisControls.x.min,
+            towerRotationAxisControls.x.max,
+            towerRotationAxisControls.x.step,
+          )
+          .name(towerRotationAxisControls.x.label)
+          .onChange((value: number) => {
+            updateTower({ rotationX: clampTowerRotationAxis('x', Number(value)) });
+          }),
+        rotationY: towerFolder
+          .add(
+            towerState,
+            'rotationY',
+            towerRotationAxisControls.y.min,
+            towerRotationAxisControls.y.max,
+            towerRotationAxisControls.y.step,
+          )
+          .name(towerRotationAxisControls.y.label)
+          .onChange((value: number) => {
+            updateTower({ rotationY: clampTowerRotationAxis('y', Number(value)) });
+          }),
+        rotationZ: towerFolder
+          .add(
+            towerState,
+            'rotationZ',
+            towerRotationAxisControls.z.min,
+            towerRotationAxisControls.z.max,
+            towerRotationAxisControls.z.step,
+          )
+          .name(towerRotationAxisControls.z.label)
+          .onChange((value: number) => {
+            updateTower({ rotationZ: clampTowerRotationAxis('z', Number(value)) });
+          }),
+        scale: towerFolder
+          .add(
+            towerState,
+            'scale',
+            uniformScaleControl.min,
+            uniformScaleControl.max,
+            uniformScaleControl.step,
+          )
+          .name(uniformScaleControl.label)
+          .onChange((value: number) => {
+            updateTower({ scale: clampUniformScale(Number(value)) });
+          }),
+      };
+
+      towerFolder.close();
+    });
+
     cameraFolder
       .add(
         {
           reset: () => {
-            setCameraPosition({
-              ...castlePerspectiveCamera.position,
-            });
+            setCameraPosition({ ...castlePerspectiveCamera.position });
+            setCameraTarget({ ...castlePerspectiveCamera.lookAt });
+            setCameraLocked(false);
           },
         },
         'reset',
       )
       .name('Reset Camera');
 
-    const addReadOnlyController = (property: keyof Pick<GuiState, 'node' | 'parent' | 'local' | 'world' | 'rotate' | 'scale'>, label: string) => {
-      const controller = nodeFolder.add(guiState, property).name(label).listen();
-      controllers.readOnly.push(controller);
-    };
-
-    addReadOnlyController('node', 'Node');
-    addReadOnlyController('parent', 'Parent');
-    addReadOnlyController('local', 'Local');
-    addReadOnlyController('world', 'World');
-    addReadOnlyController('rotate', 'Rotate');
-    addReadOnlyController('scale', 'Scale');
-
-    sceneFolder.open();
-    cameraFolder.open();
-    nodeFolder.open();
-
-    guiControllersRef.current = controllers;
+    cameraFolder.close();
+    animationFolder.close();
+    castleFolder.close();
+    rocksFolder.close();
+    skyFolder.close();
 
     return () => {
       gui.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { readOnly: [] };
+      guiControllersRef.current = { castle: {}, rocks: {}, sky: {}, towers: [] };
     };
-    // We only recreate lil-gui when the panel is toggled or the node list changes.
+    // We only recreate lil-gui when it is toggled.
     // Live values are synced in the effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeOptions, showGui]);
+  }, [showGui]);
 
   useEffect(() => {
     const guiState = guiStateRef.current;
-    const controllers = guiControllersRef.current;
 
     if (!guiState) {
       return;
     }
 
-    guiState.activeNodeKey = activeNodeKey;
-    guiState.showAxesHelpers = axesEnabled;
-    guiState.selectedOnlyMotion = selectedOnlyMotion;
+    guiState.animationEnabled = animationActive;
+    guiState.cameraMode = cameraMode;
+    guiState.cameraLocked = cameraLocked;
     guiState.cameraX = cameraPosition.x;
     guiState.cameraY = cameraPosition.y;
     guiState.cameraZ = cameraPosition.z;
-    applyDebugSnapshotToGuiState(guiState, debugSnapshot);
+    Object.assign(guiState.castle, normalizeCastleTransform(castleTransform));
+    Object.assign(guiState.rocks, normalizeRocksOverlayTransform(rocksTransform));
+    Object.assign(guiState.sky, normalizeSkyTransform(skyTransform));
+    towerTransforms.forEach((tower, index) => {
+      const guiTower = guiState.towers[index];
 
-    controllers.activeNode?.updateDisplay();
-    controllers.showAxesHelpers?.updateDisplay();
-    controllers.selectedOnlyMotion?.updateDisplay();
-    controllers.cameraX?.updateDisplay();
-    controllers.cameraY?.updateDisplay();
-    controllers.cameraZ?.updateDisplay();
-    controllers.readOnly.forEach((controller) => {
-      controller.updateDisplay();
+      if (!guiTower) {
+        return;
+      }
+
+      Object.assign(guiTower, normalizeTowerTransform(tower));
     });
-  }, [activeNodeKey, axesEnabled, cameraPosition, debugSnapshot, selectedOnlyMotion]);
+
+    guiControllersRef.current.animationEnabled?.updateDisplay();
+    guiControllersRef.current.cameraMode?.updateDisplay();
+    guiControllersRef.current.cameraLocked?.updateDisplay();
+    guiControllersRef.current.cameraX?.updateDisplay();
+    guiControllersRef.current.cameraY?.updateDisplay();
+    guiControllersRef.current.cameraZ?.updateDisplay();
+    guiControllersRef.current.castle.rotationX?.updateDisplay();
+    guiControllersRef.current.castle.rotationY?.updateDisplay();
+    guiControllersRef.current.castle.rotationZ?.updateDisplay();
+    guiControllersRef.current.castle.scale?.updateDisplay();
+    guiControllersRef.current.castle.x?.updateDisplay();
+    guiControllersRef.current.castle.y?.updateDisplay();
+    guiControllersRef.current.castle.z?.updateDisplay();
+    guiControllersRef.current.rocks.x?.updateDisplay();
+    guiControllersRef.current.rocks.y?.updateDisplay();
+    guiControllersRef.current.rocks.rotationX?.updateDisplay();
+    guiControllersRef.current.rocks.rotationY?.updateDisplay();
+    guiControllersRef.current.rocks.rotationZ?.updateDisplay();
+    guiControllersRef.current.rocks.scale?.updateDisplay();
+    guiControllersRef.current.sky.x?.updateDisplay();
+    guiControllersRef.current.sky.y?.updateDisplay();
+    guiControllersRef.current.sky.z?.updateDisplay();
+    guiControllersRef.current.sky.rotationX?.updateDisplay();
+    guiControllersRef.current.sky.rotationY?.updateDisplay();
+    guiControllersRef.current.sky.rotationZ?.updateDisplay();
+    guiControllersRef.current.sky.scale?.updateDisplay();
+
+    guiControllersRef.current.towers.forEach((controllers) => {
+      controllers.x?.updateDisplay();
+      controllers.y?.updateDisplay();
+      controllers.z?.updateDisplay();
+      controllers.rotationX?.updateDisplay();
+      controllers.rotationY?.updateDisplay();
+      controllers.rotationZ?.updateDisplay();
+      controllers.scale?.updateDisplay();
+      controllers.visible?.updateDisplay();
+    });
+  }, [animationActive, cameraLocked, cameraMode, cameraPosition, castleTransform, rocksTransform, skyTransform, towerTransforms]);
 
   return (
     <section
@@ -651,34 +1225,81 @@ export function CastleScene({
         background: 'transparent',
       }}
     >
-      {isBrowser ? (
-        <Canvas
-          camera={{
-            fov: castlePerspectiveCamera.fov,
-            position: [cameraPosition.x, cameraPosition.y, cameraPosition.z],
+      <Canvas
+        dpr={[1, 1.5]}
+        gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+        onCreated={({ gl }) => {
+          gl.setClearColor(0x000000, 0);
+        }}
+        style={{ position: 'absolute', inset: 0 }}
+      >
+        <CastleSceneCamera
+          mode={cameraMode}
+          position={cameraPosition}
+          target={cameraTarget}
+        />
+        <CastleLighting />
+        <CastleModel
+          animationEnabled={animationActive}
+          castleTransform={castleTransform}
+          key={resolvedModelUrl}
+          loadSessionId={loadSessionRef.current}
+          modelScale={modelScale}
+          modelUrl={resolvedModelUrl}
+          onSceneReady={handleSceneReady}
+          pointerTarget={pointerTarget}
+          skyTransform={skyTransform}
+          towerTransforms={towerTransforms}
+        />
+        <CastleOrbitControls
+          basePosition={cameraPosition}
+          intensity={cameraIntensity}
+          locked={cameraLocked}
+          onCameraSnapshotChange={(snapshot) => {
+            cameraSnapshotRef.current = snapshot;
           }}
-          dpr={[1, 1.75]}
-          gl={{ alpha: true, antialias: true }}
-          onCreated={({ gl }) => {
-            gl.setClearColor(0x000000, 0);
+          target={cameraTarget}
+        />
+      </Canvas>
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: '75dvh',
+          display: 'flex',
+          alignItems: 'stretch',
+          justifyContent: 'stretch',
+          overflow: 'hidden',
+          pointerEvents: 'none',
+          userSelect: 'none',
+          zIndex: 4,
+        }}
+      >
+        <img
+          alt=""
+          aria-hidden="true"
+          src={rocksTextureUrl}
+          style={{
+            display: 'block',
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            objectPosition: 'center bottom',
+            transform: [
+              `translate3d(${rocksTransform.x}px, ${rocksTransform.y}px, 0)`,
+              'perspective(1400px)',
+              `rotateX(${rocksTransform.rotationX}deg)`,
+              `rotateY(${rocksTransform.rotationY}deg)`,
+              `rotateZ(${rocksTransform.rotationZ}deg)`,
+              `scale(${rocksTransform.scale})`,
+            ].join(' '),
+            transformOrigin: 'center bottom',
           }}
-          shadows
-          style={{ position: 'absolute', inset: 0 }}
-        >
-          <SceneContent
-            binaryUrl={resolvedBinaryUrl}
-            cameraIntensity={cameraIntensity}
-            cameraPosition={cameraPosition}
-            debugConfig={debugConfig}
-            modelScale={modelScale}
-            modelUrl={resolvedModelUrl}
-            onDebugNodesChange={setNodeOptions}
-            onDebugSnapshotChange={setDebugSnapshot}
-            pointerTarget={pointerTarget}
-            resourcePath={resolvedResourcePath}
-          />
-        </Canvas>
-      ) : null}
+        />
+      </div>
       {showGui ? (
         <div
           ref={guiRootRef}
@@ -695,391 +1316,239 @@ export function CastleScene({
   );
 }
 
-function SceneContent({
-  binaryUrl,
-  cameraIntensity,
-  cameraPosition,
-  debugConfig,
-  modelScale,
-  modelUrl,
-  onDebugNodesChange,
-  onDebugSnapshotChange,
-  pointerTarget,
-  resourcePath,
-}: SceneContentProps) {
+function CastleLighting() {
   return (
     <>
-      <SceneEnvironment />
-      <ambientLight color={theme.ambientLight} intensity={2.1} />
-      <hemisphereLight args={['#ffffff', '#8c98a8', 2.2]} position={[0, 2, 0]} />
-      <directionalLight color={theme.keyLight} intensity={3.4} position={[4.5, 5.5, 6]} />
-      <spotLight
-        angle={0.42}
-        color={theme.fillLight}
-        intensity={90}
-        penumbra={1}
-        position={[-5.5, 4.5, 7]}
-      />
-      <pointLight color={theme.rimLight} intensity={45} position={[-6, -2, -5]} />
-      {modelUrl ? (
-        <SceneModel
-          binaryUrl={binaryUrl}
-          debugConfig={debugConfig}
-          key={`${modelUrl}:${resourcePath}:${binaryUrl}`}
-          modelScale={modelScale}
-          modelUrl={modelUrl}
-          onDebugNodesChange={onDebugNodesChange}
-          onDebugSnapshotChange={onDebugSnapshotChange}
-          pointerTarget={pointerTarget}
-          resourcePath={resourcePath}
-        />
-      ) : null}
-      <SceneOrbitControls basePosition={cameraPosition} intensity={cameraIntensity} />
+      <ambientLight intensity={0.85} />
+      <directionalLight intensity={1.15} position={[5, 6, 4]} />
+      <directionalLight intensity={0.35} position={[-4, 2, -5]} />
     </>
   );
 }
 
-function SceneEnvironment() {
-  const { gl, scene } = useThree();
-
-  useEffect(() => {
-    const previousEnvironment = scene.environment;
-    const previousExposure = gl.toneMappingExposure;
-    const pmremGenerator = new THREE.PMREMGenerator(gl);
-    const environmentTexture = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
-
-    // eslint-disable-next-line react-hooks/immutability
-    scene.environment = environmentTexture;
-    // eslint-disable-next-line react-hooks/immutability
-    gl.toneMappingExposure = 1.18;
-
-    return () => {
-      scene.environment = previousEnvironment;
-      gl.toneMappingExposure = previousExposure;
-      environmentTexture.dispose();
-      pmremGenerator.dispose();
-    };
-  }, [gl, scene]);
-
-  return null;
-}
-
-function SceneModel({
-  binaryUrl,
-  debugConfig,
+function CastleModel({
+  animationEnabled,
+  castleTransform,
+  loadSessionId,
   modelScale,
   modelUrl,
-  onDebugNodesChange,
-  onDebugSnapshotChange,
+  onSceneReady,
   pointerTarget,
-  resourcePath,
-}: SceneModelProps) {
-  const [gltf, setGltf] = useState<GLTF | null>(null);
-  const group = useRef<THREE.Group>(null);
-  const sceneRootHelper = useRef<THREE.AxesHelper | null>(null);
-  const selectedNodeHelper = useRef<THREE.AxesHelper | null>(null);
-  const lastAnimatedNode = useRef<THREE.Object3D | null>(null);
-  const lastDebugUpdate = useRef(0);
+  skyTransform,
+  towerTransforms,
+}: CastleModelProps) {
+  const groupRef = useRef<THREE.Group>(null);
   const { camera, size } = useThree();
-  const modelFormat = getModelFormat(modelUrl);
-  const resolvedResourcePath =
-    resourcePath
-      ? getResourceDirectoryPath(resourcePath)
-      : modelFormat === 'gltf'
-        ? getDefaultResourcePath(modelUrl)
-        : '';
-  const resolvedBinaryUrl = binaryUrl.trim();
+  const gltf = useGLTF(modelUrl, dracoDecoderPath);
+  const towerGltf = useGLTF(defaultTowerModelUrl, dracoDecoderPath);
+  const skyTexture = useTexture(vortexTextureUrl);
+
+  const preparedCastle = useMemo(
+    () =>
+      buildPreparedCastleScene(
+        gltf.scene,
+        camera,
+        size.height > 0 ? size.width / size.height : 1,
+        modelScale,
+      ),
+    [camera, gltf.scene, modelScale, size.height, size.width],
+  );
+
+  const preparedTower = useMemo(
+    () => buildPreparedTowerScene(towerGltf.scene, preparedCastle.worldScale),
+    [preparedCastle.worldScale, towerGltf.scene],
+  );
+  const preparedSkyTexture = useMemo(() => prepareSkyTexture(skyTexture), [skyTexture]);
+  const attachedTower = towerTransforms[0];
+  const detachedTowers = towerTransforms.slice(1);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadingManager = new THREE.LoadingManager();
-    const dracoLoader = new DRACOLoader();
-    const loader = new GLTFLoader(loadingManager);
-
-    dracoLoader.setDecoderPath(dracoDecoderPath);
-    dracoLoader.setDecoderConfig({ type: 'js' });
-    dracoLoader.preload();
-    loader.setDRACOLoader(dracoLoader);
-    loader.setCrossOrigin('anonymous');
-
-    loadingManager.setURLModifier((requestedUrl) => {
-      if (resolvedBinaryUrl && normalizeAssetKey(requestedUrl).endsWith('.bin')) {
-        return resolvedBinaryUrl;
-      }
-
-      return requestedUrl;
-    });
-
-    if (resolvedResourcePath) {
-      loader.setResourcePath(ensureTrailingSlash(resolvedResourcePath));
-    }
-
-    loader.load(
-      modelUrl,
-      (loadedModel) => {
-        if (!cancelled) {
-          setGltf(loadedModel);
-        }
-      },
-      undefined,
-      (error) => {
-        console.error('[CastleScene] model-load-error', error);
-      },
-    );
-
-    return () => {
-      cancelled = true;
-      dracoLoader.dispose();
-    };
-  }, [modelUrl, resolvedBinaryUrl, resolvedResourcePath]);
-
-  const preparedScene = useMemo(() => {
-    if (!gltf) {
-      return null;
-    }
-
-    const clonedScene = gltf.scene.clone(true);
-    const bounds = new THREE.Box3().setFromObject(clonedScene);
-    const center = bounds.getCenter(new THREE.Vector3());
-    const sceneSize = bounds.getSize(new THREE.Vector3());
-    const viewportAtFitDistance = getViewportAtDistance(
-      castlePerspectiveCamera.position.z,
-      camera instanceof THREE.PerspectiveCamera ? camera.fov : castlePerspectiveCamera.fov,
-      size.height > 0 ? size.width / size.height : 1,
-    );
-    const widthScale = viewportAtFitDistance.width / Math.max(sceneSize.x, 0.001);
-    const heightScale = viewportAtFitDistance.height / Math.max(sceneSize.y, 0.001);
-    const normalizedScale = Math.min(widthScale, heightScale) * modelScale * 0.92;
-
-    clonedScene.position.sub(center);
-    clonedScene.scale.multiplyScalar(normalizedScale);
-    clonedScene.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-
-    return clonedScene;
-  }, [camera, gltf, modelScale, size.height, size.width]);
-
-  const resolveActiveDebugObject = () => {
-    if (!preparedScene) {
-      return null;
-    }
-
-    if (!debugConfig.selectedNodeKey || debugConfig.selectedNodeKey === sceneRootDebugKey) {
-      return preparedScene;
-    }
-
-    let matchedObject: THREE.Object3D | null = null;
-
-    preparedScene.traverse((child) => {
-      if (child.userData.__castleDebugKey === debugConfig.selectedNodeKey) {
-        matchedObject = child;
-      }
-    });
-
-    return matchedObject ?? preparedScene;
-  };
+    onSceneReady(loadSessionId, modelUrl);
+  }, [loadSessionId, modelUrl, onSceneReady, preparedCastle.root, preparedTower]);
 
   useEffect(() => {
-    if (!preparedScene) {
-      onDebugNodesChange([{ key: sceneRootDebugKey, label: 'Scene Root' }]);
-      onDebugSnapshotChange(null);
+    if (!groupRef.current) {
       return;
     }
 
-    const nextNodeOptions: DebugNodeOption[] = [{ key: sceneRootDebugKey, label: 'Scene Root' }];
-
-    preparedScene.traverse((child) => {
-      child.userData.__castleDebugKey = getDebugNodeKey(child, preparedScene);
-      child.userData.__castleBasePosition = child.position.clone();
-      child.userData.__castleBaseRotation = child.rotation.clone();
-
-      if (child !== preparedScene) {
-        nextNodeOptions.push({
-          key: child.userData.__castleDebugKey as string,
-          label: child.userData.__castleDebugKey as string,
-        });
-      }
-    });
-
-    onDebugNodesChange(nextNodeOptions);
-    onDebugSnapshotChange(createDebugSnapshot(preparedScene));
-  }, [onDebugNodesChange, onDebugSnapshotChange, preparedScene]);
-
-  useEffect(() => {
-    if (!preparedScene) {
-      return undefined;
-    }
-
-    preparedScene.traverse((child) => {
-      resetObjectTransform(child);
-    });
-
-    if (group.current) {
-      group.current.position.set(0, -0.18, 0);
-      group.current.rotation.set(0, 0, 0);
-    }
-
-    return undefined;
-  }, [debugConfig.selectedNodeKey, debugConfig.selectedOnlyMotion, preparedScene]);
-
-  useEffect(() => {
-    const groupObject = group.current;
-
-    if (!groupObject || !preparedScene) {
-      return undefined;
-    }
-
-    let activeDebugObject: THREE.Object3D | null = preparedScene;
-
-    if (debugConfig.selectedNodeKey && debugConfig.selectedNodeKey !== sceneRootDebugKey) {
-      preparedScene.traverse((child) => {
-        if (child.userData.__castleDebugKey === debugConfig.selectedNodeKey) {
-          activeDebugObject = child;
-        }
-      });
-    }
-
-    if (sceneRootHelper.current) {
-      groupObject.remove(sceneRootHelper.current);
-      sceneRootHelper.current.dispose();
-      sceneRootHelper.current = null;
-    }
-
-    if (selectedNodeHelper.current?.parent) {
-      selectedNodeHelper.current.parent.remove(selectedNodeHelper.current);
-      selectedNodeHelper.current.dispose();
-      selectedNodeHelper.current = null;
-    }
-
-    if (!debugConfig.enabled || !debugConfig.showAxesHelpers) {
-      return undefined;
-    }
-
-    sceneRootHelper.current = new THREE.AxesHelper(0.85);
-    groupObject.add(sceneRootHelper.current);
-
-    if (activeDebugObject && activeDebugObject !== preparedScene) {
-      selectedNodeHelper.current = new THREE.AxesHelper(0.55);
-      activeDebugObject.add(selectedNodeHelper.current);
-    }
-
-    return () => {
-      if (sceneRootHelper.current) {
-        groupObject.remove(sceneRootHelper.current);
-        sceneRootHelper.current.dispose();
-        sceneRootHelper.current = null;
-      }
-
-      if (selectedNodeHelper.current?.parent) {
-        selectedNodeHelper.current.parent.remove(selectedNodeHelper.current);
-        selectedNodeHelper.current.dispose();
-        selectedNodeHelper.current = null;
-      }
-    };
-  }, [debugConfig.enabled, debugConfig.selectedNodeKey, debugConfig.showAxesHelpers, preparedScene]);
+    groupRef.current.position.set(0, 0, 0);
+    groupRef.current.rotation.set(0, 0, 0);
+  }, [animationEnabled, preparedCastle.root, preparedTower]);
 
   useFrame((_, delta) => {
-    if (!group.current || !preparedScene) {
+    if (!groupRef.current) {
       return;
     }
 
-    const activeDebugObject = resolveActiveDebugObject();
+    if (!animationEnabled) {
+      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, 0, 3.2, delta);
+      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, 0, 3.2, delta);
+      groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, 0, 3, delta);
+      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, 0, 3.4, delta);
+      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, 0, 3.4, delta);
+      groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, 0, 3.2, delta);
+      return;
+    }
+
     const { x, y } = pointerTarget.current;
-    const motionOffsets = {
-      positionX: x * 0.12,
-      positionY: y * 0.06,
-      positionZ: -Math.abs(x) * 0.04 - Math.abs(y) * 0.03,
-      rotationX: -y * 0.06,
-      rotationY: x * 0.12,
-      rotationZ: x * y * -0.03,
-    };
 
-    const applyMotionToObject = (target: THREE.Object3D) => {
-      const basePosition = (target.userData.__castleBasePosition as THREE.Vector3 | undefined) ?? new THREE.Vector3();
-      const baseRotation = (target.userData.__castleBaseRotation as THREE.Euler | undefined) ?? new THREE.Euler();
-
-      target.position.x = THREE.MathUtils.damp(target.position.x, basePosition.x + motionOffsets.positionX, 3.2, delta);
-      target.position.y = THREE.MathUtils.damp(target.position.y, basePosition.y + motionOffsets.positionY, 3.2, delta);
-      target.position.z = THREE.MathUtils.damp(target.position.z, basePosition.z + motionOffsets.positionZ, 3, delta);
-      target.rotation.x = THREE.MathUtils.damp(target.rotation.x, baseRotation.x + motionOffsets.rotationX, 3.4, delta);
-      target.rotation.y = THREE.MathUtils.damp(target.rotation.y, baseRotation.y + motionOffsets.rotationY, 3.4, delta);
-      target.rotation.z = THREE.MathUtils.damp(target.rotation.z, baseRotation.z + motionOffsets.rotationZ, 3.2, delta);
-    };
-
-    if (debugConfig.selectedOnlyMotion && activeDebugObject) {
-      if (lastAnimatedNode.current && lastAnimatedNode.current !== activeDebugObject) {
-        resetObjectTransform(lastAnimatedNode.current);
-      }
-
-      group.current.position.x = THREE.MathUtils.damp(group.current.position.x, 0, 3.2, delta);
-      group.current.position.y = THREE.MathUtils.damp(group.current.position.y, -0.18, 3.2, delta);
-      group.current.position.z = THREE.MathUtils.damp(group.current.position.z, 0, 3, delta);
-      group.current.rotation.x = THREE.MathUtils.damp(group.current.rotation.x, 0, 3.4, delta);
-      group.current.rotation.y = THREE.MathUtils.damp(group.current.rotation.y, 0, 3.4, delta);
-      group.current.rotation.z = THREE.MathUtils.damp(group.current.rotation.z, 0, 3.2, delta);
-
-      applyMotionToObject(activeDebugObject);
-      lastAnimatedNode.current = activeDebugObject;
-    } else {
-      if (lastAnimatedNode.current) {
-        resetObjectTransform(lastAnimatedNode.current);
-        lastAnimatedNode.current = null;
-      }
-
-      group.current.position.x = THREE.MathUtils.damp(group.current.position.x, motionOffsets.positionX, 3.2, delta);
-      group.current.position.y = THREE.MathUtils.damp(group.current.position.y, -0.18 + motionOffsets.positionY, 3.2, delta);
-      group.current.position.z = THREE.MathUtils.damp(group.current.position.z, motionOffsets.positionZ, 3, delta);
-      group.current.rotation.x = THREE.MathUtils.damp(group.current.rotation.x, motionOffsets.rotationX, 3.4, delta);
-      group.current.rotation.y = THREE.MathUtils.damp(group.current.rotation.y, motionOffsets.rotationY, 3.4, delta);
-      group.current.rotation.z = THREE.MathUtils.damp(group.current.rotation.z, motionOffsets.rotationZ, 3.2, delta);
-    }
-
-    if (debugConfig.enabled && activeDebugObject) {
-      const elapsedTime = performance.now();
-
-      if (elapsedTime - lastDebugUpdate.current > 120) {
-        onDebugSnapshotChange(createDebugSnapshot(activeDebugObject));
-        lastDebugUpdate.current = elapsedTime;
-      }
-    }
+    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.12, 3.2, delta);
+    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.06, 3.2, delta);
+    groupRef.current.position.z = THREE.MathUtils.damp(
+      groupRef.current.position.z,
+      -Math.abs(x) * 0.04 - Math.abs(y) * 0.03,
+      3,
+      delta,
+    );
+    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.06, 3.4, delta);
+    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.12, 3.4, delta);
+    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.03, 3.2, delta);
   });
 
-  if (!preparedScene) {
-    return null;
-  }
-
   return (
-    <Float floatIntensity={0.18} rotationIntensity={0.05} speed={1.15}>
-      <group ref={group} position={[0, -0.18, 0]}>
-        <primitive object={preparedScene} />
+    <group ref={groupRef}>
+      <mesh
+        position={[skyTransform.x, skyTransform.y, skyTransform.z]}
+        renderOrder={-1}
+        rotation={[
+          THREE.MathUtils.degToRad(skyTransform.rotationX),
+          THREE.MathUtils.degToRad(skyTransform.rotationY),
+          THREE.MathUtils.degToRad(skyTransform.rotationZ),
+        ]}
+        scale={[skyTransform.scale, skyTransform.scale, skyTransform.scale]}
+      >
+        <planeGeometry args={[18, 12]} />
+        <meshBasicMaterial map={preparedSkyTexture} toneMapped={false} />
+      </mesh>
+      <group
+        position={[castleTransform.x, castleTransform.y, castleTransform.z]}
+        rotation={[
+          THREE.MathUtils.degToRad(castleTransform.rotationX),
+          THREE.MathUtils.degToRad(castleTransform.rotationY),
+          THREE.MathUtils.degToRad(castleTransform.rotationZ),
+        ]}
+        scale={[castleTransform.scale, castleTransform.scale, castleTransform.scale]}
+      >
+        <primitive object={preparedCastle.root} />
+        {attachedTower ? (
+          <group
+            key="tower-1"
+            position={[attachedTower.x, attachedTower.y, attachedTower.z]}
+            rotation={[
+              THREE.MathUtils.degToRad(attachedTower.rotationX),
+              THREE.MathUtils.degToRad(attachedTower.rotationY),
+              THREE.MathUtils.degToRad(attachedTower.rotationZ),
+            ]}
+            scale={[attachedTower.scale, attachedTower.scale, attachedTower.scale]}
+          >
+            <Clone object={preparedTower} />
+          </group>
+        ) : null}
       </group>
-    </Float>
+      {detachedTowers.map((tower, index) =>
+        tower.visible ? (
+        <group
+          key={`tower-${index + 2}`}
+          position={[tower.x, tower.y, tower.z]}
+          rotation={[
+            THREE.MathUtils.degToRad(tower.rotationX),
+            THREE.MathUtils.degToRad(tower.rotationY),
+            THREE.MathUtils.degToRad(tower.rotationZ),
+          ]}
+          scale={[tower.scale, tower.scale, tower.scale]}
+        >
+          <Clone object={preparedTower} />
+        </group>
+        ) : null,
+      )}
+    </group>
   );
 }
 
-function SceneOrbitControls({ basePosition, intensity }: SceneOrbitControlsProps) {
+function CastleSceneCamera({ mode, position, target }: CastleSceneCameraProps) {
+  const { size } = useThree();
+  const orthographicZoom = getOrthographicZoom(position, target, size.height);
+  const cameraPosition: [number, number, number] = [position.x, position.y, position.z];
+
+  if (mode === 'Orthographic') {
+    return (
+      <OrthographicCamera
+        far={1000}
+        makeDefault
+        near={0.1}
+        position={cameraPosition}
+        zoom={orthographicZoom}
+      />
+    );
+  }
+
+  return (
+    <PerspectiveCamera
+      far={1000}
+      fov={castlePerspectiveCamera.fov}
+      makeDefault
+      near={0.1}
+      position={cameraPosition}
+    />
+  );
+}
+
+function CastleOrbitControls({
+  basePosition,
+  intensity,
+  locked,
+  onCameraSnapshotChange,
+  target,
+}: CastleOrbitControlsProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const { camera, invalidate } = useThree();
 
   useEffect(() => {
     camera.position.set(basePosition.x, basePosition.y, basePosition.z);
     controlsRef.current?.target.set(
-      castlePerspectiveCamera.lookAt.x,
-      castlePerspectiveCamera.lookAt.y,
-      castlePerspectiveCamera.lookAt.z,
+      target.x,
+      target.y,
+      target.z,
     );
     controlsRef.current?.update();
     invalidate();
-  }, [basePosition.x, basePosition.y, basePosition.z, camera, invalidate]);
+  }, [basePosition.x, basePosition.y, basePosition.z, camera, invalidate, target.x, target.y, target.z]);
+
+  useEffect(() => {
+    const controls = controlsRef.current;
+
+    if (!controls) {
+      return undefined;
+    }
+
+    const emitSnapshot = () => {
+      onCameraSnapshotChange({
+        position: {
+          x: camera.position.x,
+          y: camera.position.y,
+          z: camera.position.z,
+        },
+        target: {
+          x: controls.target.x,
+          y: controls.target.y,
+          z: controls.target.z,
+        },
+      });
+    };
+
+    emitSnapshot();
+    controls.addEventListener('change', emitSnapshot);
+
+    return () => {
+      controls.removeEventListener('change', emitSnapshot);
+    };
+  }, [camera, onCameraSnapshotChange]);
 
   return (
     <OrbitControls
       ref={controlsRef}
       dampingFactor={0.08}
+      enabled={!locked}
       enableDamping
       enablePan
       enableRotate
@@ -1088,11 +1557,7 @@ function SceneOrbitControls({ basePosition, intensity }: SceneOrbitControlsProps
       maxDistance={50}
       minDistance={0.5}
       rotateSpeed={0.65 + intensity * 0.35}
-      target={[
-        castlePerspectiveCamera.lookAt.x,
-        castlePerspectiveCamera.lookAt.y,
-        castlePerspectiveCamera.lookAt.z,
-      ]}
+      target={[target.x, target.y, target.z]}
       zoomSpeed={0.65 + intensity * 0.35}
     />
   );

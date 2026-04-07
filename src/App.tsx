@@ -1,19 +1,15 @@
 import { CastleScene } from './components/CastleScene';
 
-const previewModelUrl = '/assets/Castle/Castle.gltf';
-const previewResourcePath = '/assets/Castle/';
-const previewBinaryUrl = '/assets/Castle/Castle.bin';
+const previewModelUrl = '/assets/Castle-Building/castle-building.glb';
 
 function App() {
   return (
     <CastleScene
-      binaryUrl={previewBinaryUrl}
+      animationEnabled
       cameraIntensity={0.38}
       modelScale={1}
       modelUrl={previewModelUrl}
-      resourcePath={previewResourcePath}
       showGui
-      showAxesHelpers
     />
   );
 }

@@ -15,18 +15,7 @@ const castleSceneWebflow = declareComponent(CastleScene, {
     modelUrl: props.Text({
       name: 'Model URL',
       defaultValue: '',
-      tooltip: 'Paste a public GLB or GLTF URL for the Castle scene.',
-    }),
-    resourcePath: props.Text({
-      name: 'Resource Path',
-      defaultValue: '',
-      tooltip:
-        'Optional folder URL for GLTF companion files. Leave blank when the .gltf and .bin live in the same folder.',
-    }),
-    binaryUrl: props.Text({
-      name: 'Binary URL',
-      defaultValue: '',
-      tooltip: 'Optional direct URL for the Castle .bin file when you need to override it.',
+      tooltip: 'Paste the public Castle .glb or .gltf URL.',
     }),
     modelScale: props.Number({
       name: 'Model Scale',
@@ -69,22 +58,11 @@ const castleSceneWebflow = declareComponent(CastleScene, {
       trueLabel: 'On',
       falseLabel: 'Off',
     }),
-    showAxesHelpers: props.Boolean({
-      name: 'Show Axes',
+    animationEnabled: props.Boolean({
+      name: 'Enable Motion',
       defaultValue: true,
       trueLabel: 'On',
       falseLabel: 'Off',
-    }),
-    selectedNodeName: props.Text({
-      name: 'Selected Node',
-      defaultValue: '',
-      tooltip: 'Optional node path to preselect in the GUI.',
-    }),
-    selectedNodeOnlyMotion: props.Boolean({
-      name: 'Selected Motion',
-      defaultValue: false,
-      trueLabel: 'Selected Only',
-      falseLabel: 'Whole Scene',
     }),
   },
 });
