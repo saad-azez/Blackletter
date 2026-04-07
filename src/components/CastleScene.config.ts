@@ -96,7 +96,7 @@ export const castleTowerDefaults = [
     rotationX: 0,
     rotationY: 0,
     rotationZ: 0,
-    scale: 1,
+    scale: 0.6,
     visible: true,
     x: -3.07,
     y: -2.15,
