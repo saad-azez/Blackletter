@@ -35,15 +35,6 @@ export interface SkyTransform {
   z: number;
 }
 
-export interface RocksOverlayTransform {
-  rotationX: number;
-  rotationY: number;
-  rotationZ: number;
-  scale: number;
-  x: number;
-  y: number;
-}
-
 export const castlePerspectiveCamera = {
   fov: 42,
   lookAt: {
@@ -144,15 +135,6 @@ export const skyTransformDefaults = {
   z: -4,
 } as const satisfies SkyTransform;
 
-export const rocksOverlayDefaults = {
-  rotationX: 0,
-  rotationY: 0,
-  rotationZ: 0,
-  scale: 1,
-  x: 0,
-  y: 98,
-} as const satisfies RocksOverlayTransform;
-
 export const towerPositionAxisControls = {
   x: {
     label: 'Position X',
@@ -203,29 +185,6 @@ export const towerRotationAxisControls = {
   },
 } as const satisfies Record<
   keyof SceneCameraPosition,
-  {
-    label: string;
-    max: number;
-    min: number;
-    step: number;
-  }
->;
-
-export const overlayOffsetControls = {
-  x: {
-    label: 'Offset X',
-    max: 1600,
-    min: -1600,
-    step: 1,
-  },
-  y: {
-    label: 'Offset Y',
-    max: 1200,
-    min: -1200,
-    step: 1,
-  },
-} as const satisfies Record<
-  'x' | 'y',
   {
     label: string;
     max: number;

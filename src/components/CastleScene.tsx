@@ -1,6 +1,5 @@
 import {
   Clone,
-  OrbitControls,
   OrthographicCamera,
   PerspectiveCamera,
   useGLTF,
@@ -8,10 +7,10 @@ import {
 } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import GUI from 'lil-gui';
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import * as THREE from 'three';
-import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 
+import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.png';
 import rocksTextureUrl from '../assets/Textures/rocks.png';
 import vortexTextureUrl from '../assets/Textures/vortex.jpeg';
 import {
@@ -19,39 +18,39 @@ import {
   castlePerspectiveCamera,
   castleTowerDefaults,
   castleTransformDefaults,
-  overlayOffsetControls,
-  rocksOverlayDefaults,
   skyTransformDefaults,
   uniformScaleControl,
   towerPositionAxisControls,
   towerRotationAxisControls,
   type CastleTransform,
-  type RocksOverlayTransform,
   type SceneCameraPosition,
   type SkyTransform,
   type TowerTransform,
 } from './CastleScene.config';
 
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
-const defaultModelUrl = '/assets/Castle-Building/castle-building.glb';
-const defaultTowerModelUrl = '/assets/Castle/Tower/Tower.glb';
 const cameraModes = ['Perspective', 'Orthographic'] as const;
+const defaultCastleModelUrl = new URL('../assets/Castle/Castle-Building/castle-building.glb', import.meta.url).href;
+const defaultTowerModelUrl = new URL('../assets/Castle/Tower/Tower.glb', import.meta.url).href;
+const defaultFloorModelUrl = new URL('../assets/Floor/Floor.glb', import.meta.url).href;
 
-useGLTF.preload(defaultModelUrl, dracoDecoderPath);
+useGLTF.preload(defaultCastleModelUrl, dracoDecoderPath);
 useGLTF.preload(defaultTowerModelUrl, dracoDecoderPath);
+useGLTF.preload(defaultFloorModelUrl, dracoDecoderPath);
 useTexture.preload(vortexTextureUrl);
 
 type CameraMode = (typeof cameraModes)[number];
 
 export interface CastleSceneProps {
-  modelUrl?: string;
+  castleModelUrl?: string;
+  floorModelUrl?: string;
   modelScale?: number;
-  cameraIntensity?: number;
   cameraX?: number;
   cameraY?: number;
   cameraZ?: number;
-  showGui?: boolean;
   animationEnabled?: boolean;
+  modelUrl?: string;
+  towerModelUrl?: string;
 }
 
 interface GuiState {
@@ -62,7 +61,6 @@ interface GuiState {
   cameraY: number;
   cameraZ: number;
   castle: CastleTransform;
-  rocks: RocksOverlayTransform;
   sky: SkyTransform;
   towers: TowerTransform[];
 }
@@ -75,15 +73,6 @@ interface CastleGuiControllers {
   x?: ReturnType<GUI['add']>;
   y?: ReturnType<GUI['add']>;
   z?: ReturnType<GUI['add']>;
-}
-
-interface RocksGuiControllers {
-  rotationX?: ReturnType<GUI['add']>;
-  rotationY?: ReturnType<GUI['add']>;
-  rotationZ?: ReturnType<GUI['add']>;
-  scale?: ReturnType<GUI['add']>;
-  x?: ReturnType<GUI['add']>;
-  y?: ReturnType<GUI['add']>;
 }
 
 interface SkyGuiControllers {
@@ -115,7 +104,6 @@ interface GuiControllers {
   cameraY?: ReturnType<GUI['add']>;
   cameraZ?: ReturnType<GUI['add']>;
   castle: CastleGuiControllers;
-  rocks: RocksGuiControllers;
   sky: SkyGuiControllers;
   towers: TowerGuiControllers[];
 }
@@ -123,21 +111,14 @@ interface GuiControllers {
 interface CastleModelProps {
   animationEnabled: boolean;
   castleTransform: CastleTransform;
-  loadSessionId: number;
+  floorModelUrl: string;
   modelScale: number;
   modelUrl: string;
-  onSceneReady: (loadSessionId: number, modelUrl: string) => void;
+  onFloorScreenRectChange: (screenRect: FloorScreenRect | null) => void;
   pointerTarget: MutableRefObject<THREE.Vector2>;
   skyTransform: SkyTransform;
+  towerModelUrl: string;
   towerTransforms: TowerTransform[];
-}
-
-interface CastleOrbitControlsProps {
-  basePosition: SceneCameraPosition;
-  intensity: number;
-  locked: boolean;
-  onCameraSnapshotChange: (snapshot: CameraSnapshot) => void;
-  target: SceneCameraPosition;
 }
 
 interface CastleSceneCameraProps {
@@ -147,6 +128,7 @@ interface CastleSceneCameraProps {
 }
 
 interface PreparedSceneResult {
+  baseY: number;
   root: THREE.Group;
   worldScale: number;
 }
@@ -154,6 +136,13 @@ interface PreparedSceneResult {
 interface CameraSnapshot {
   position: SceneCameraPosition;
   target: SceneCameraPosition;
+}
+
+interface FloorScreenRect {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
 }
 
 function toText(value: unknown) {
@@ -214,12 +203,6 @@ function clampUniformScale(value: number) {
   return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function clampOverlayOffset(axis: 'x' | 'y', value: number) {
-  const control = overlayOffsetControls[axis];
-
-  return THREE.MathUtils.clamp(value, control.min, control.max);
-}
-
 function normalizeCastleTransform(transform: CastleTransform): CastleTransform {
   return {
     rotationX: clampTowerRotationAxis('x', transform.rotationX),
@@ -257,17 +240,6 @@ function normalizeSkyTransform(transform: SkyTransform): SkyTransform {
   };
 }
 
-function normalizeRocksOverlayTransform(transform: RocksOverlayTransform): RocksOverlayTransform {
-  return {
-    rotationX: clampTowerRotationAxis('x', transform.rotationX),
-    rotationY: clampTowerRotationAxis('y', transform.rotationY),
-    rotationZ: clampTowerRotationAxis('z', transform.rotationZ),
-    scale: clampUniformScale(transform.scale),
-    x: clampOverlayOffset('x', transform.x),
-    y: clampOverlayOffset('y', transform.y),
-  };
-}
-
 function cloneTowerTransforms(towers: readonly TowerTransform[]) {
   return towers.map((tower) => normalizeTowerTransform({ ...tower }));
 }
@@ -296,6 +268,84 @@ function getViewportAtDistance(distance: number, fov: number, aspectRatio: numbe
     width: height * aspectRatio,
   };
 }
+
+function getWorldScaleForSceneSize(
+  size: THREE.Vector3,
+  camera: THREE.Camera,
+  aspectRatio: number,
+  modelScale: number,
+) {
+  const fov =
+    camera instanceof THREE.PerspectiveCamera ? camera.fov : castlePerspectiveCamera.fov;
+  const viewport = getViewportAtDistance(castlePerspectiveCamera.position.z, fov, aspectRatio);
+
+  return (
+    Math.min(
+      viewport.width / Math.max(size.x, 0.001),
+      viewport.height / Math.max(size.y, 0.001),
+    ) *
+    modelScale *
+    0.92
+  );
+}
+
+function scaleScenePosition<T extends SceneCameraPosition>(position: T, factor: number): T {
+  return {
+    ...position,
+    x: position.x * factor,
+    y: position.y * factor,
+    z: position.z * factor,
+  };
+}
+
+function getProjectedScreenRect(
+  bounds: THREE.Box3,
+  camera: THREE.Camera,
+  viewportWidth: number,
+  viewportHeight: number,
+): FloorScreenRect | null {
+  const corners = [
+    new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.min.z),
+    new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.max.z),
+    new THREE.Vector3(bounds.min.x, bounds.max.y, bounds.min.z),
+    new THREE.Vector3(bounds.min.x, bounds.max.y, bounds.max.z),
+    new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.min.z),
+    new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.max.z),
+    new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.min.z),
+    new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.max.z),
+  ];
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  corners.forEach((corner) => {
+    const projected = corner.clone().project(camera);
+
+    minX = Math.min(minX, projected.x);
+    maxX = Math.max(maxX, projected.x);
+    minY = Math.min(minY, projected.y);
+    maxY = Math.max(maxY, projected.y);
+  });
+
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
+    return null;
+  }
+
+  const left = ((minX + 1) / 2) * viewportWidth;
+  const right = ((maxX + 1) / 2) * viewportWidth;
+  const top = ((1 - maxY) / 2) * viewportHeight;
+  const bottom = ((1 - minY) / 2) * viewportHeight;
+
+  return {
+    height: Math.max(bottom - top, 0),
+    left,
+    top,
+    width: Math.max(right - left, 0),
+  };
+}
+
 
 function prepareSceneMaterial(material: THREE.Material) {
   const clonedMaterial = material.clone();
@@ -354,21 +404,13 @@ function buildPreparedCastleScene(
   const bounds = new THREE.Box3().setFromObject(root);
   const center = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
-  const fov =
-    camera instanceof THREE.PerspectiveCamera ? camera.fov : castlePerspectiveCamera.fov;
-  const viewport = getViewportAtDistance(castlePerspectiveCamera.position.z, fov, aspectRatio);
-  const worldScale =
-    Math.min(
-      viewport.width / Math.max(size.x, 0.001),
-      viewport.height / Math.max(size.y, 0.001),
-    ) *
-    modelScale *
-    0.92;
+  const worldScale = getWorldScaleForSceneSize(size, camera, aspectRatio, modelScale);
+  const baseY = (bounds.min.y - center.y) * worldScale;
 
   root.scale.setScalar(worldScale);
   root.position.set(-center.x * worldScale, -center.y * worldScale, -center.z * worldScale);
 
-  return { root, worldScale };
+  return { baseY, root, worldScale };
 }
 
 function buildPreparedTowerScene(scene: THREE.Object3D, worldScale: number) {
@@ -383,47 +425,62 @@ function buildPreparedTowerScene(scene: THREE.Object3D, worldScale: number) {
   return root;
 }
 
+function buildPreparedFloorScene(scene: THREE.Object3D, worldScale: number) {
+  const root = prepareSceneMaterials(scene);
+  const bounds = new THREE.Box3().setFromObject(root);
+  const center = bounds.getCenter(new THREE.Vector3());
+  const topY = bounds.max.y;
+
+  root.scale.setScalar(worldScale);
+  root.position.set(-center.x * worldScale, -topY * worldScale, -center.z * worldScale);
+
+  return root;
+}
+
 export function CastleScene({
+  castleModelUrl = '',
+  floorModelUrl = '',
   modelUrl = '',
   modelScale = 1,
-  cameraIntensity = 0.35,
   cameraX = castlePerspectiveCamera.position.x,
   cameraY = castlePerspectiveCamera.position.y,
   cameraZ = castlePerspectiveCamera.position.z,
-  showGui = true,
   animationEnabled = true,
+  towerModelUrl = '',
 }: CastleSceneProps) {
   const sectionRef = useRef<HTMLElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
-  const guiControllersRef = useRef<GuiControllers>({ castle: {}, rocks: {}, sky: {}, towers: [] });
-  const loadSessionRef = useRef(0);
-  const loadStartTimeRef = useRef(0);
-  const completedLoadSessionRef = useRef(0);
+  const guiControllersRef = useRef<GuiControllers>({ castle: {}, sky: {}, towers: [] });
   const cameraSnapshotRef = useRef<CameraSnapshot>({
     position: { ...castlePerspectiveCamera.position },
     target: { ...castlePerspectiveCamera.lookAt },
   });
+  const showGui = false;
 
-  const resolvedModelUrl = toText(modelUrl).trim() || defaultModelUrl;
+  const resolvedCastleModelUrl =
+    toText(castleModelUrl).trim() || toText(modelUrl).trim() || defaultCastleModelUrl;
+  const resolvedTowerModelUrl = toText(towerModelUrl).trim() || defaultTowerModelUrl;
+  const resolvedFloorModelUrl = toText(floorModelUrl).trim() || defaultFloorModelUrl;
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
     x: clampCameraAxis('x', toNumber(cameraX, castlePerspectiveCamera.position.x)),
     y: clampCameraAxis('y', toNumber(cameraY, castlePerspectiveCamera.position.y)),
     z: clampCameraAxis('z', toNumber(cameraZ, castlePerspectiveCamera.position.z)),
   });
   const [cameraMode, setCameraMode] = useState<CameraMode>('Perspective');
-  const [cameraTarget, setCameraTarget] = useState<SceneCameraPosition>({
+  const [cameraTarget, setCameraTarget] = useState<SceneCameraPosition>(() => ({
     ...castlePerspectiveCamera.lookAt,
-  });
+  }));
   const [cameraLocked, setCameraLocked] = useState(false);
   const [animationActive, setAnimationActive] = useState(animationEnabled);
   const [castleTransform, setCastleTransform] = useState<CastleTransform>(() =>
     normalizeCastleTransform({ ...castleTransformDefaults }),
   );
-  const [rocksTransform, setRocksTransform] = useState<RocksOverlayTransform>(() =>
-    normalizeRocksOverlayTransform({ ...rocksOverlayDefaults }),
+  const [floorScreenRect, setFloorScreenRect] = useState<FloorScreenRect | null>(null);
+  const [isMobileViewport, setIsMobileViewport] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth <= 767 : false,
   );
   const [skyTransform, setSkyTransform] = useState<SkyTransform>(() =>
     normalizeSkyTransform({ ...skyTransformDefaults }),
@@ -445,48 +502,38 @@ export function CastleScene({
   }, [animationEnabled]);
 
   useEffect(() => {
-    cameraSnapshotRef.current = {
-      position: { ...cameraPosition },
-      target: { ...cameraTarget },
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const updateViewportMode = () => {
+      setIsMobileViewport(window.innerWidth <= 767);
     };
-  }, [cameraPosition, cameraTarget]);
 
-  useEffect(() => {
-    useGLTF.preload(resolvedModelUrl, dracoDecoderPath);
-  }, [resolvedModelUrl]);
+    updateViewportMode();
+    window.addEventListener('resize', updateViewportMode);
 
-  useEffect(() => {
-    loadSessionRef.current += 1;
-    loadStartTimeRef.current = performance.now();
+    return () => {
+      window.removeEventListener('resize', updateViewportMode);
+    };
+  }, []);
 
-    console.log('[CastleScene] load-start', {
-      loadSessionId: loadSessionRef.current,
-      modelUrl: resolvedModelUrl,
-      startedAt: loadStartTimeRef.current,
-    });
-  }, [resolvedModelUrl]);
-
-  const handleSceneReady = (loadSessionId: number, readyModelUrl: string) => {
-    if (loadSessionId !== loadSessionRef.current) {
-      return;
+  const rocksOverlayTop = useMemo(() => {
+    if (!floorScreenRect) {
+      return '48%';
     }
 
-    if (completedLoadSessionRef.current === loadSessionId) {
-      return;
-    }
+    const viewportHeight = typeof window === 'undefined' ? floorScreenRect.top : window.innerHeight;
 
-    completedLoadSessionRef.current = loadSessionId;
+    return Math.max(Math.min(floorScreenRect.top, viewportHeight), 0);
+  }, [floorScreenRect]);
+  const rocksBackgroundImage = isMobileViewport ? rocksMobileTextureUrl : rocksTextureUrl;
 
-    const completedAt = performance.now();
-    const durationMs = Number((completedAt - loadStartTimeRef.current).toFixed(2));
-
-    console.log('[CastleScene] load-complete', {
-      completedAt,
-      durationMs,
-      loadSessionId,
-      modelUrl: readyModelUrl,
-    });
-  };
+  useEffect(() => {
+    useGLTF.preload(resolvedCastleModelUrl, dracoDecoderPath);
+    useGLTF.preload(resolvedTowerModelUrl, dracoDecoderPath);
+    useGLTF.preload(resolvedFloorModelUrl, dracoDecoderPath);
+  }, [resolvedCastleModelUrl, resolvedFloorModelUrl, resolvedTowerModelUrl]);
 
   useEffect(() => {
     const element = sectionRef.current;
@@ -548,7 +595,7 @@ export function CastleScene({
       guiRef.current?.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { castle: {}, rocks: {}, sky: {}, towers: [] };
+      guiControllersRef.current = { castle: {}, sky: {}, towers: [] };
       return undefined;
     }
 
@@ -562,7 +609,6 @@ export function CastleScene({
       cameraY: cameraPosition.y,
       cameraZ: cameraPosition.z,
       castle: normalizeCastleTransform({ ...castleTransform }),
-      rocks: normalizeRocksOverlayTransform({ ...rocksTransform }),
       sky: normalizeSkyTransform({ ...skyTransform }),
       towers: cloneTowerTransforms(towerTransforms),
     };
@@ -571,7 +617,6 @@ export function CastleScene({
     const cameraFolder = gui.addFolder('Camera');
     const animationFolder = gui.addFolder('Animation');
     const castleFolder = gui.addFolder('Castle');
-    const rocksFolder = gui.addFolder('Rocks');
     const skyFolder = gui.addFolder('Sky');
 
     guiRootRef.current.appendChild(gui.domElement);
@@ -766,110 +811,6 @@ export function CastleScene({
           .onChange((value: number) => {
             setCastleTransform((currentValue) =>
               normalizeCastleTransform({
-                ...currentValue,
-                scale: Number(value),
-              }),
-            );
-          }),
-      },
-      rocks: {
-        x: rocksFolder
-          .add(
-            guiState.rocks,
-            'x',
-            overlayOffsetControls.x.min,
-            overlayOffsetControls.x.max,
-            overlayOffsetControls.x.step,
-          )
-          .name(overlayOffsetControls.x.label)
-          .onChange((value: number) => {
-            setRocksTransform((currentValue) =>
-              normalizeRocksOverlayTransform({
-                ...currentValue,
-                x: Number(value),
-              }),
-            );
-          }),
-        y: rocksFolder
-          .add(
-            guiState.rocks,
-            'y',
-            overlayOffsetControls.y.min,
-            overlayOffsetControls.y.max,
-            overlayOffsetControls.y.step,
-          )
-          .name(overlayOffsetControls.y.label)
-          .onChange((value: number) => {
-            setRocksTransform((currentValue) =>
-              normalizeRocksOverlayTransform({
-                ...currentValue,
-                y: Number(value),
-              }),
-            );
-          }),
-        rotationX: rocksFolder
-          .add(
-            guiState.rocks,
-            'rotationX',
-            towerRotationAxisControls.x.min,
-            towerRotationAxisControls.x.max,
-            towerRotationAxisControls.x.step,
-          )
-          .name(towerRotationAxisControls.x.label)
-          .onChange((value: number) => {
-            setRocksTransform((currentValue) =>
-              normalizeRocksOverlayTransform({
-                ...currentValue,
-                rotationX: Number(value),
-              }),
-            );
-          }),
-        rotationY: rocksFolder
-          .add(
-            guiState.rocks,
-            'rotationY',
-            towerRotationAxisControls.y.min,
-            towerRotationAxisControls.y.max,
-            towerRotationAxisControls.y.step,
-          )
-          .name(towerRotationAxisControls.y.label)
-          .onChange((value: number) => {
-            setRocksTransform((currentValue) =>
-              normalizeRocksOverlayTransform({
-                ...currentValue,
-                rotationY: Number(value),
-              }),
-            );
-          }),
-        rotationZ: rocksFolder
-          .add(
-            guiState.rocks,
-            'rotationZ',
-            towerRotationAxisControls.z.min,
-            towerRotationAxisControls.z.max,
-            towerRotationAxisControls.z.step,
-          )
-          .name(towerRotationAxisControls.z.label)
-          .onChange((value: number) => {
-            setRocksTransform((currentValue) =>
-              normalizeRocksOverlayTransform({
-                ...currentValue,
-                rotationZ: Number(value),
-              }),
-            );
-          }),
-        scale: rocksFolder
-          .add(
-            guiState.rocks,
-            'scale',
-            uniformScaleControl.min,
-            uniformScaleControl.max,
-            uniformScaleControl.step,
-          )
-          .name(uniformScaleControl.label)
-          .onChange((value: number) => {
-            setRocksTransform((currentValue) =>
-              normalizeRocksOverlayTransform({
                 ...currentValue,
                 scale: Number(value),
               }),
@@ -1132,14 +1073,13 @@ export function CastleScene({
     cameraFolder.close();
     animationFolder.close();
     castleFolder.close();
-    rocksFolder.close();
     skyFolder.close();
 
     return () => {
       gui.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { castle: {}, rocks: {}, sky: {}, towers: [] };
+      guiControllersRef.current = { castle: {}, sky: {}, towers: [] };
     };
     // We only recreate lil-gui when it is toggled.
     // Live values are synced in the effect below.
@@ -1160,7 +1100,6 @@ export function CastleScene({
     guiState.cameraY = cameraPosition.y;
     guiState.cameraZ = cameraPosition.z;
     Object.assign(guiState.castle, normalizeCastleTransform(castleTransform));
-    Object.assign(guiState.rocks, normalizeRocksOverlayTransform(rocksTransform));
     Object.assign(guiState.sky, normalizeSkyTransform(skyTransform));
     towerTransforms.forEach((tower, index) => {
       const guiTower = guiState.towers[index];
@@ -1185,12 +1124,6 @@ export function CastleScene({
     guiControllersRef.current.castle.x?.updateDisplay();
     guiControllersRef.current.castle.y?.updateDisplay();
     guiControllersRef.current.castle.z?.updateDisplay();
-    guiControllersRef.current.rocks.x?.updateDisplay();
-    guiControllersRef.current.rocks.y?.updateDisplay();
-    guiControllersRef.current.rocks.rotationX?.updateDisplay();
-    guiControllersRef.current.rocks.rotationY?.updateDisplay();
-    guiControllersRef.current.rocks.rotationZ?.updateDisplay();
-    guiControllersRef.current.rocks.scale?.updateDisplay();
     guiControllersRef.current.sky.x?.updateDisplay();
     guiControllersRef.current.sky.y?.updateDisplay();
     guiControllersRef.current.sky.z?.updateDisplay();
@@ -1209,7 +1142,7 @@ export function CastleScene({
       controllers.scale?.updateDisplay();
       controllers.visible?.updateDisplay();
     });
-  }, [animationActive, cameraLocked, cameraMode, cameraPosition, castleTransform, rocksTransform, skyTransform, towerTransforms]);
+  }, [animationActive, cameraLocked, cameraMode, cameraPosition, castleTransform, skyTransform, towerTransforms]);
 
   return (
     <section
@@ -1242,23 +1175,15 @@ export function CastleScene({
         <CastleModel
           animationEnabled={animationActive}
           castleTransform={castleTransform}
-          key={resolvedModelUrl}
-          loadSessionId={loadSessionRef.current}
+          floorModelUrl={resolvedFloorModelUrl}
+          key={[resolvedCastleModelUrl, resolvedTowerModelUrl, resolvedFloorModelUrl].join('::')}
           modelScale={modelScale}
-          modelUrl={resolvedModelUrl}
-          onSceneReady={handleSceneReady}
+          modelUrl={resolvedCastleModelUrl}
+          onFloorScreenRectChange={setFloorScreenRect}
           pointerTarget={pointerTarget}
           skyTransform={skyTransform}
+          towerModelUrl={resolvedTowerModelUrl}
           towerTransforms={towerTransforms}
-        />
-        <CastleOrbitControls
-          basePosition={cameraPosition}
-          intensity={cameraIntensity}
-          locked={cameraLocked}
-          onCameraSnapshotChange={(snapshot) => {
-            cameraSnapshotRef.current = snapshot;
-          }}
-          target={cameraTarget}
         />
       </Canvas>
       <div
@@ -1268,38 +1193,16 @@ export function CastleScene({
           left: 0,
           right: 0,
           bottom: 0,
-          height: '75dvh',
-          display: 'flex',
-          alignItems: 'stretch',
-          justifyContent: 'stretch',
-          overflow: 'hidden',
+          top: rocksOverlayTop,
+          zIndex: 4,
           pointerEvents: 'none',
           userSelect: 'none',
-          zIndex: 4,
+          backgroundImage: `url(${rocksBackgroundImage})`,
+          backgroundPosition: 'center bottom',
+          backgroundRepeat: 'no-repeat',
+          backgroundSize: 'cover',
         }}
-      >
-        <img
-          alt=""
-          aria-hidden="true"
-          src={rocksTextureUrl}
-          style={{
-            display: 'block',
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            objectPosition: 'center bottom',
-            transform: [
-              `translate3d(${rocksTransform.x}px, ${rocksTransform.y}px, 0)`,
-              'perspective(1400px)',
-              `rotateX(${rocksTransform.rotationX}deg)`,
-              `rotateY(${rocksTransform.rotationY}deg)`,
-              `rotateZ(${rocksTransform.rotationZ}deg)`,
-              `scale(${rocksTransform.scale})`,
-            ].join(' '),
-            transformOrigin: 'center bottom',
-          }}
-        />
-      </div>
+      />
       {showGui ? (
         <div
           ref={guiRootRef}
@@ -1329,18 +1232,20 @@ function CastleLighting() {
 function CastleModel({
   animationEnabled,
   castleTransform,
-  loadSessionId,
+  floorModelUrl,
   modelScale,
   modelUrl,
-  onSceneReady,
+  onFloorScreenRectChange,
   pointerTarget,
   skyTransform,
+  towerModelUrl,
   towerTransforms,
 }: CastleModelProps) {
   const groupRef = useRef<THREE.Group>(null);
   const { camera, size } = useThree();
   const gltf = useGLTF(modelUrl, dracoDecoderPath);
-  const towerGltf = useGLTF(defaultTowerModelUrl, dracoDecoderPath);
+  const floorGltf = useGLTF(floorModelUrl, dracoDecoderPath);
+  const towerGltf = useGLTF(towerModelUrl, dracoDecoderPath);
   const skyTexture = useTexture(vortexTextureUrl);
 
   const preparedCastle = useMemo(
@@ -1358,13 +1263,149 @@ function CastleModel({
     () => buildPreparedTowerScene(towerGltf.scene, preparedCastle.worldScale),
     [preparedCastle.worldScale, towerGltf.scene],
   );
+  const preparedFloor = useMemo(
+    () => buildPreparedFloorScene(floorGltf.scene, preparedCastle.worldScale),
+    [floorGltf.scene, preparedCastle.worldScale],
+  );
   const preparedSkyTexture = useMemo(() => prepareSkyTexture(skyTexture), [skyTexture]);
-  const attachedTower = towerTransforms[0];
-  const detachedTowers = towerTransforms.slice(1);
+  const referenceWorldScale = useMemo(() => {
+    const bounds = new THREE.Box3().setFromObject(gltf.scene);
+    const sceneSize = bounds.getSize(new THREE.Vector3());
+
+    return getWorldScaleForSceneSize(sceneSize, camera, 16 / 9, modelScale);
+  }, [camera, gltf.scene, modelScale]);
+  const layoutPositionScale = useMemo(() => {
+    if (!Number.isFinite(referenceWorldScale) || referenceWorldScale <= 0) {
+      return 1;
+    }
+
+    return preparedCastle.worldScale / referenceWorldScale;
+  }, [preparedCastle.worldScale, referenceWorldScale]);
+  const responsiveCastleTransform = useMemo(
+    () => ({
+      ...castleTransform,
+      ...scaleScenePosition(castleTransform, layoutPositionScale),
+    }),
+    [castleTransform, layoutPositionScale],
+  );
+  const responsiveTowerTransforms = useMemo(
+    () =>
+      towerTransforms.map((tower) => ({
+        ...tower,
+        ...scaleScenePosition(tower, layoutPositionScale),
+      })),
+    [layoutPositionScale, towerTransforms],
+  );
+  const attachedTower = responsiveTowerTransforms[0];
+  const detachedTowers = responsiveTowerTransforms.slice(1);
+  const compositionBounds = useMemo(() => {
+    const root = new THREE.Group();
+    const castleGroup = new THREE.Group();
+
+    castleGroup.position.set(
+      responsiveCastleTransform.x,
+      responsiveCastleTransform.y,
+      responsiveCastleTransform.z,
+    );
+    castleGroup.rotation.set(
+      THREE.MathUtils.degToRad(responsiveCastleTransform.rotationX),
+      THREE.MathUtils.degToRad(responsiveCastleTransform.rotationY),
+      THREE.MathUtils.degToRad(responsiveCastleTransform.rotationZ),
+    );
+    castleGroup.scale.setScalar(responsiveCastleTransform.scale);
+    castleGroup.add(preparedCastle.root.clone(true));
+
+    if (attachedTower) {
+      const attachedTowerGroup = new THREE.Group();
+
+      attachedTowerGroup.position.set(attachedTower.x, attachedTower.y, attachedTower.z);
+      attachedTowerGroup.rotation.set(
+        THREE.MathUtils.degToRad(attachedTower.rotationX),
+        THREE.MathUtils.degToRad(attachedTower.rotationY),
+        THREE.MathUtils.degToRad(attachedTower.rotationZ),
+      );
+      attachedTowerGroup.scale.setScalar(attachedTower.scale);
+      attachedTowerGroup.add(preparedTower.clone(true));
+      castleGroup.add(attachedTowerGroup);
+    }
+
+    root.add(castleGroup);
+
+    detachedTowers.forEach((tower) => {
+      if (!tower.visible) {
+        return;
+      }
+
+      const towerGroup = new THREE.Group();
+
+      towerGroup.position.set(tower.x, tower.y, tower.z);
+      towerGroup.rotation.set(
+        THREE.MathUtils.degToRad(tower.rotationX),
+        THREE.MathUtils.degToRad(tower.rotationY),
+        THREE.MathUtils.degToRad(tower.rotationZ),
+      );
+      towerGroup.scale.setScalar(tower.scale);
+      towerGroup.add(preparedTower.clone(true));
+      root.add(towerGroup);
+    });
+
+    root.updateMatrixWorld(true);
+
+    const bounds = new THREE.Box3().setFromObject(root);
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+
+    return {
+      baseY: bounds.min.y,
+      center,
+      size,
+    };
+  }, [attachedTower, detachedTowers, preparedCastle.root, preparedTower, responsiveCastleTransform]);
+  const floorCoverageScale = useMemo(() => {
+    const floorBounds = new THREE.Box3().setFromObject(preparedFloor);
+    const floorSize = floorBounds.getSize(new THREE.Vector3());
+    const paddedWidth = compositionBounds.size.x * 1.18;
+    const paddedDepth = compositionBounds.size.z * 1.18;
+
+    return Math.max(
+      paddedWidth / Math.max(floorSize.x, 0.001),
+      paddedDepth / Math.max(floorSize.z, 0.001),
+      1,
+    );
+  }, [compositionBounds.size.x, compositionBounds.size.z, preparedFloor]);
+  const floorScreenRect = useMemo(() => {
+    if (!size.width || !size.height) {
+      return null;
+    }
+
+    const floorGroup = new THREE.Group();
+
+    floorGroup.position.set(
+      compositionBounds.center.x,
+      compositionBounds.baseY - 0.02,
+      compositionBounds.center.z,
+    );
+    floorGroup.scale.set(floorCoverageScale, 1, floorCoverageScale);
+    floorGroup.add(preparedFloor.clone(true));
+    floorGroup.updateMatrixWorld(true);
+
+    const bounds = new THREE.Box3().setFromObject(floorGroup);
+
+    return getProjectedScreenRect(bounds, camera, size.width, size.height);
+  }, [
+    camera,
+    compositionBounds.baseY,
+    compositionBounds.center.x,
+    compositionBounds.center.z,
+    floorCoverageScale,
+    preparedFloor,
+    size.height,
+    size.width,
+  ]);
 
   useEffect(() => {
-    onSceneReady(loadSessionId, modelUrl);
-  }, [loadSessionId, modelUrl, onSceneReady, preparedCastle.root, preparedTower]);
+    onFloorScreenRectChange(floorScreenRect);
+  }, [floorScreenRect, onFloorScreenRectChange]);
 
   useEffect(() => {
     if (!groupRef.current) {
@@ -1373,7 +1414,7 @@ function CastleModel({
 
     groupRef.current.position.set(0, 0, 0);
     groupRef.current.rotation.set(0, 0, 0);
-  }, [animationEnabled, preparedCastle.root, preparedTower]);
+  }, [animationEnabled, preparedCastle.root, preparedFloor, preparedTower]);
 
   useFrame((_, delta) => {
     if (!groupRef.current) {
@@ -1421,13 +1462,19 @@ function CastleModel({
         <meshBasicMaterial map={preparedSkyTexture} toneMapped={false} />
       </mesh>
       <group
-        position={[castleTransform.x, castleTransform.y, castleTransform.z]}
+        position={[compositionBounds.center.x, compositionBounds.baseY - 0.02, compositionBounds.center.z]}
+        scale={[floorCoverageScale, 1, floorCoverageScale]}
+      >
+        <primitive object={preparedFloor} />
+      </group>
+      <group
+        position={[responsiveCastleTransform.x, responsiveCastleTransform.y, responsiveCastleTransform.z]}
         rotation={[
-          THREE.MathUtils.degToRad(castleTransform.rotationX),
-          THREE.MathUtils.degToRad(castleTransform.rotationY),
-          THREE.MathUtils.degToRad(castleTransform.rotationZ),
+          THREE.MathUtils.degToRad(responsiveCastleTransform.rotationX),
+          THREE.MathUtils.degToRad(responsiveCastleTransform.rotationY),
+          THREE.MathUtils.degToRad(responsiveCastleTransform.rotationZ),
         ]}
-        scale={[castleTransform.scale, castleTransform.scale, castleTransform.scale]}
+        scale={[responsiveCastleTransform.scale, responsiveCastleTransform.scale, responsiveCastleTransform.scale]}
       >
         <primitive object={preparedCastle.root} />
         {attachedTower ? (
@@ -1469,10 +1516,29 @@ function CastleSceneCamera({ mode, position, target }: CastleSceneCameraProps) {
   const { size } = useThree();
   const orthographicZoom = getOrthographicZoom(position, target, size.height);
   const cameraPosition: [number, number, number] = [position.x, position.y, position.z];
+  const orthographicCameraRef = useRef<THREE.OrthographicCamera>(null);
+  const perspectiveCameraRef = useRef<THREE.PerspectiveCamera>(null);
+
+  useLayoutEffect(() => {
+    const camera = mode === 'Orthographic' ? orthographicCameraRef.current : perspectiveCameraRef.current;
+
+    if (!camera) {
+      return;
+    }
+
+    camera.position.set(position.x, position.y, position.z);
+    camera.lookAt(target.x, target.y, target.z);
+    camera.updateMatrixWorld();
+
+    if (camera instanceof THREE.OrthographicCamera || camera instanceof THREE.PerspectiveCamera) {
+      camera.updateProjectionMatrix();
+    }
+  }, [mode, orthographicZoom, position.x, position.y, position.z, target.x, target.y, target.z]);
 
   if (mode === 'Orthographic') {
     return (
       <OrthographicCamera
+        ref={orthographicCameraRef}
         far={1000}
         makeDefault
         near={0.1}
@@ -1484,81 +1550,12 @@ function CastleSceneCamera({ mode, position, target }: CastleSceneCameraProps) {
 
   return (
     <PerspectiveCamera
+      ref={perspectiveCameraRef}
       far={1000}
       fov={castlePerspectiveCamera.fov}
       makeDefault
       near={0.1}
       position={cameraPosition}
-    />
-  );
-}
-
-function CastleOrbitControls({
-  basePosition,
-  intensity,
-  locked,
-  onCameraSnapshotChange,
-  target,
-}: CastleOrbitControlsProps) {
-  const controlsRef = useRef<OrbitControlsImpl | null>(null);
-  const { camera, invalidate } = useThree();
-
-  useEffect(() => {
-    camera.position.set(basePosition.x, basePosition.y, basePosition.z);
-    controlsRef.current?.target.set(
-      target.x,
-      target.y,
-      target.z,
-    );
-    controlsRef.current?.update();
-    invalidate();
-  }, [basePosition.x, basePosition.y, basePosition.z, camera, invalidate, target.x, target.y, target.z]);
-
-  useEffect(() => {
-    const controls = controlsRef.current;
-
-    if (!controls) {
-      return undefined;
-    }
-
-    const emitSnapshot = () => {
-      onCameraSnapshotChange({
-        position: {
-          x: camera.position.x,
-          y: camera.position.y,
-          z: camera.position.z,
-        },
-        target: {
-          x: controls.target.x,
-          y: controls.target.y,
-          z: controls.target.z,
-        },
-      });
-    };
-
-    emitSnapshot();
-    controls.addEventListener('change', emitSnapshot);
-
-    return () => {
-      controls.removeEventListener('change', emitSnapshot);
-    };
-  }, [camera, onCameraSnapshotChange]);
-
-  return (
-    <OrbitControls
-      ref={controlsRef}
-      dampingFactor={0.08}
-      enabled={!locked}
-      enableDamping
-      enablePan
-      enableRotate
-      enableZoom
-      makeDefault
-      maxDistance={50}
-      minDistance={0.5}
-      rotateSpeed={0.65 + intensity * 0.35}
-      target={[target.x, target.y, target.z]}
-      zoomSpeed={0.65 + intensity * 0.35}
     />
   );
 }

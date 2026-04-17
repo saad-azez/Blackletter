@@ -25,7 +25,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "@webflow/data-types": "^1.2.2",
     "@webflow/react": "^1.2.2",
-    "@webflow/webflow-cli": "^1.13.0",
+    "@webflow/webflow-cli": "^1.13.1",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
