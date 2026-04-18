@@ -12,7 +12,6 @@ import * as THREE from 'three';
 
 import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.png';
 import rocksTextureUrl from '../assets/Textures/rocks.png';
-import vortexTextureUrl from '../assets/Textures/vortex.jpeg';
 import {
   castleCameraAxisControls,
   castlePerspectiveCamera,
@@ -33,11 +32,12 @@ const cameraModes = ['Perspective', 'Orthographic'] as const;
 const defaultCastleModelUrl = new URL('../assets/Castle/Castle-Building/castle-building.glb', import.meta.url).href;
 const defaultTowerModelUrl = new URL('../assets/Castle/Tower/Tower.glb', import.meta.url).href;
 const defaultFloorModelUrl = new URL('../assets/Floor/Floor.glb', import.meta.url).href;
+const defaultSkyTextureUrl = new URL('../assets/Textures/vortex.jpeg', import.meta.url).href;
 
 useGLTF.preload(defaultCastleModelUrl, dracoDecoderPath);
 useGLTF.preload(defaultTowerModelUrl, dracoDecoderPath);
 useGLTF.preload(defaultFloorModelUrl, dracoDecoderPath);
-useTexture.preload(vortexTextureUrl);
+useTexture.preload(defaultSkyTextureUrl);
 
 type CameraMode = (typeof cameraModes)[number];
 
@@ -50,6 +50,8 @@ export interface CastleSceneProps {
   cameraZ?: number;
   animationEnabled?: boolean;
   modelUrl?: string;
+  rocksImageUrl?: string;
+  skyTextureUrl?: string;
   towerModelUrl?: string;
 }
 
@@ -116,6 +118,7 @@ interface CastleModelProps {
   modelUrl: string;
   onFloorScreenRectChange: (screenRect: FloorScreenRect | null) => void;
   pointerTarget: MutableRefObject<THREE.Vector2>;
+  skyTextureUrl: string;
   skyTransform: SkyTransform;
   towerModelUrl: string;
   towerTransforms: TowerTransform[];
@@ -446,6 +449,8 @@ export function CastleScene({
   cameraY = castlePerspectiveCamera.position.y,
   cameraZ = castlePerspectiveCamera.position.z,
   animationEnabled = true,
+  rocksImageUrl = '',
+  skyTextureUrl = '',
   towerModelUrl = '',
 }: CastleSceneProps) {
   const sectionRef = useRef<HTMLElement>(null);
@@ -464,6 +469,8 @@ export function CastleScene({
     toText(castleModelUrl).trim() || toText(modelUrl).trim() || defaultCastleModelUrl;
   const resolvedTowerModelUrl = toText(towerModelUrl).trim() || defaultTowerModelUrl;
   const resolvedFloorModelUrl = toText(floorModelUrl).trim() || defaultFloorModelUrl;
+  const resolvedRocksImageUrl = toText(rocksImageUrl).trim();
+  const resolvedSkyTextureUrl = toText(skyTextureUrl).trim() || defaultSkyTextureUrl;
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
     x: clampCameraAxis('x', toNumber(cameraX, castlePerspectiveCamera.position.x)),
     y: clampCameraAxis('y', toNumber(cameraY, castlePerspectiveCamera.position.y)),
@@ -527,13 +534,15 @@ export function CastleScene({
 
     return Math.max(Math.min(floorScreenRect.top, viewportHeight), 0);
   }, [floorScreenRect]);
-  const rocksBackgroundImage = isMobileViewport ? rocksMobileTextureUrl : rocksTextureUrl;
+  const rocksBackgroundImage =
+    resolvedRocksImageUrl || (isMobileViewport ? rocksMobileTextureUrl : rocksTextureUrl);
 
   useEffect(() => {
     useGLTF.preload(resolvedCastleModelUrl, dracoDecoderPath);
     useGLTF.preload(resolvedTowerModelUrl, dracoDecoderPath);
     useGLTF.preload(resolvedFloorModelUrl, dracoDecoderPath);
-  }, [resolvedCastleModelUrl, resolvedFloorModelUrl, resolvedTowerModelUrl]);
+    useTexture.preload(resolvedSkyTextureUrl);
+  }, [resolvedCastleModelUrl, resolvedFloorModelUrl, resolvedSkyTextureUrl, resolvedTowerModelUrl]);
 
   useEffect(() => {
     const element = sectionRef.current;
@@ -1176,11 +1185,12 @@ export function CastleScene({
           animationEnabled={animationActive}
           castleTransform={castleTransform}
           floorModelUrl={resolvedFloorModelUrl}
-          key={[resolvedCastleModelUrl, resolvedTowerModelUrl, resolvedFloorModelUrl].join('::')}
+          key={[resolvedCastleModelUrl, resolvedTowerModelUrl, resolvedFloorModelUrl, resolvedSkyTextureUrl].join('::')}
           modelScale={modelScale}
           modelUrl={resolvedCastleModelUrl}
           onFloorScreenRectChange={setFloorScreenRect}
           pointerTarget={pointerTarget}
+          skyTextureUrl={resolvedSkyTextureUrl}
           skyTransform={skyTransform}
           towerModelUrl={resolvedTowerModelUrl}
           towerTransforms={towerTransforms}
@@ -1237,6 +1247,7 @@ function CastleModel({
   modelUrl,
   onFloorScreenRectChange,
   pointerTarget,
+  skyTextureUrl,
   skyTransform,
   towerModelUrl,
   towerTransforms,
@@ -1246,7 +1257,7 @@ function CastleModel({
   const gltf = useGLTF(modelUrl, dracoDecoderPath);
   const floorGltf = useGLTF(floorModelUrl, dracoDecoderPath);
   const towerGltf = useGLTF(towerModelUrl, dracoDecoderPath);
-  const skyTexture = useTexture(vortexTextureUrl);
+  const skyTexture = useTexture(skyTextureUrl);
 
   const preparedCastle = useMemo(
     () =>

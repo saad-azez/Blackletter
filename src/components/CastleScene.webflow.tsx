@@ -26,6 +26,16 @@ const castleSceneWebflow = declareComponent(CastleScene, {
       defaultValue: '',
       tooltip: 'Paste the public URL for the floor .glb file.',
     }),
+    skyTextureUrl: props.Text({
+      name: 'Sky Texture URL',
+      defaultValue: '',
+      tooltip: 'Paste the public URL for the sky texture image.',
+    }),
+    rocksImageUrl: props.Text({
+      name: 'Rocks Image URL',
+      defaultValue: '',
+      tooltip: 'Paste the public URL for the rocks foreground image.',
+    }),
   },
 });
 
