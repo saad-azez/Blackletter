@@ -1211,7 +1211,7 @@ export function CastleScene({
           backgroundImage: `url(${rocksBackgroundImage})`,
           backgroundPosition: 'center bottom',
           backgroundRepeat: 'no-repeat',
-          backgroundSize: 'cover',
+          backgroundSize: 'contain',
         }}
       />
       {showGui ? (
