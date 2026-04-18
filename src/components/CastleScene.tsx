@@ -51,6 +51,7 @@ export interface CastleSceneProps {
   animationEnabled?: boolean;
   modelUrl?: string;
   rocksImageUrl?: string;
+  showGui?: boolean;
   skyTextureUrl?: string;
   towerModelUrl?: string;
 }
@@ -450,6 +451,7 @@ export function CastleScene({
   cameraZ = castlePerspectiveCamera.position.z,
   animationEnabled = true,
   rocksImageUrl = '',
+  showGui = false,
   skyTextureUrl = '',
   towerModelUrl = '',
 }: CastleSceneProps) {
@@ -463,7 +465,6 @@ export function CastleScene({
     position: { ...castlePerspectiveCamera.position },
     target: { ...castlePerspectiveCamera.lookAt },
   });
-  const showGui = false;
 
   const resolvedCastleModelUrl =
     toText(castleModelUrl).trim() || toText(modelUrl).trim() || defaultCastleModelUrl;
