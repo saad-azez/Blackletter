@@ -137,7 +137,7 @@ function SceneChrome({ debug, scene }: { debug: boolean; scene: SceneRoute }) {
 
 function ScenePage({ debug, scene }: { debug: boolean; scene: SceneRoute }) {
   return (
-    <div style={shellStyles.layout}>
+    <div className="scene-page" style={shellStyles.layout}>
       <SceneChrome debug={debug} scene={scene} />
       {scene === 'castle' ? (
         <CastleScene animationEnabled modelScale={1} showGui={debug} />

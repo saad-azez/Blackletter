@@ -909,15 +909,9 @@ export function ChessScene({
 
   return (
     <section
+      className="scene-viewport"
       ref={sectionRef}
       style={{
-        position: 'relative',
-        width: '100vw',
-        height: '100dvh',
-        minHeight: '100dvh',
-        marginLeft: 'calc(50% - 50vw)',
-        marginRight: 'calc(50% - 50vw)',
-        overflow: 'hidden',
         background:
           'radial-gradient(circle at 50% 25%, rgba(255, 246, 230, 0.44), transparent 44%), linear-gradient(180deg, #1f1815 0%, #0d0b0a 100%)',
       }}

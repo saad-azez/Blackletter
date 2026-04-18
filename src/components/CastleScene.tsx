@@ -486,7 +486,7 @@ export function CastleScene({
   const [castleTransform, setCastleTransform] = useState<CastleTransform>(() =>
     normalizeCastleTransform({ ...castleTransformDefaults }),
   );
-  const [floorScreenRect, setFloorScreenRect] = useState<FloorScreenRect | null>(null);
+  const [, setFloorScreenRect] = useState<FloorScreenRect | null>(null);
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= 767 : false,
   );
@@ -526,15 +526,6 @@ export function CastleScene({
     };
   }, []);
 
-  const rocksOverlayTop = useMemo(() => {
-    if (!floorScreenRect) {
-      return '48%';
-    }
-
-    const viewportHeight = typeof window === 'undefined' ? floorScreenRect.top : window.innerHeight;
-
-    return Math.max(Math.min(floorScreenRect.top, viewportHeight), 0);
-  }, [floorScreenRect]);
   const rocksBackgroundImage =
     resolvedRocksImageUrl || (isMobileViewport ? rocksMobileTextureUrl : rocksTextureUrl);
 
@@ -1156,15 +1147,9 @@ export function CastleScene({
 
   return (
     <section
+      className="scene-viewport"
       ref={sectionRef}
       style={{
-        position: 'relative',
-        width: '100vw',
-        height: '100dvh',
-        minHeight: '100dvh',
-        marginLeft: 'calc(50% - 50vw)',
-        marginRight: 'calc(50% - 50vw)',
-        overflow: 'hidden',
         background: 'transparent',
       }}
     >
@@ -1197,21 +1182,22 @@ export function CastleScene({
           towerTransforms={towerTransforms}
         />
       </Canvas>
-      <div
+      <img
         aria-hidden="true"
+        alt=""
+        src={rocksBackgroundImage}
         style={{
           position: 'absolute',
           left: 0,
           right: 0,
-          bottom: 0,
-          top: rocksOverlayTop,
+          bottom: '0%',
           zIndex: 4,
           pointerEvents: 'none',
           userSelect: 'none',
-          backgroundImage: `url(${rocksBackgroundImage})`,
-          backgroundPosition: 'center bottom',
-          backgroundRepeat: 'no-repeat',
-          backgroundSize: 'contain',
+          width: '100%',
+          height: '85%',
+          objectFit: 'cover',
+          objectPosition: 'center bottom',
         }}
       />
       {showGui ? (
