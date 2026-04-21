@@ -19,6 +19,9 @@ import * as THREE from 'three';
 import battlefieldTextureUrl from '../assets/Textures/low_angle_battlefield_depth_of_field_pillars_cinema.jpeg';
 import {
   chessCameraAxisControls,
+  chessFloorLightAxisControls,
+  chessFloorLightDefaults,
+  chessFloorLightOpacityControl,
   chessFloorTransformDefaults,
   chessPerspectiveCamera,
   chessPieceDefaults,
@@ -30,6 +33,7 @@ import {
   type SceneCameraPosition,
   type SceneTransform,
 } from './ChessScene.config';
+import { FloorTopLight, clampFloorLightOpacity, type FloorLightSettings } from './FloorTopLight';
 
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const cameraModes = ['Perspective', 'Orthographic'] as const;
@@ -60,6 +64,7 @@ interface GuiState {
   cameraY: number;
   cameraZ: number;
   floor: SceneTransform;
+  floorLight: FloorLightSettings;
   pieces: ChessPieceTransform[];
 }
 
@@ -74,6 +79,13 @@ interface TransformGuiControllers {
   z?: ReturnType<GUI['add']>;
 }
 
+interface FloorLightGuiControllers {
+  opacity?: ReturnType<GUI['add']>;
+  x?: ReturnType<GUI['add']>;
+  y?: ReturnType<GUI['add']>;
+  z?: ReturnType<GUI['add']>;
+}
+
 interface GuiControllers {
   animationEnabled?: ReturnType<GUI['add']>;
   cameraMode?: ReturnType<GUI['add']>;
@@ -81,12 +93,14 @@ interface GuiControllers {
   cameraY?: ReturnType<GUI['add']>;
   cameraZ?: ReturnType<GUI['add']>;
   floor: TransformGuiControllers;
+  floorLight: FloorLightGuiControllers;
   pieces: TransformGuiControllers[];
 }
 
 interface ChessBoardSceneProps {
   animationEnabled: boolean;
   chessModelUrl: string;
+  floorLight: FloorLightSettings;
   floorModelUrl: string;
   floorTransform: SceneTransform;
   modelScale: number;
@@ -156,6 +170,12 @@ function clampScenePositionAxis(axis: keyof SceneCameraPosition, value: number) 
   return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
+function clampFloorLightAxis(axis: keyof Omit<FloorLightSettings, 'opacity'>, value: number) {
+  const control = chessFloorLightAxisControls[axis];
+
+  return THREE.MathUtils.clamp(value, control.min, control.max);
+}
+
 function clampPieceLayoutAxis(axis: keyof SceneCameraPosition, value: number) {
   const control = pieceLayoutAxisControls[axis];
 
@@ -181,6 +201,15 @@ function normalizeFloorTransform(transform: SceneTransform): SceneTransform {
     x: clampScenePositionAxis('x', transform.x),
     y: clampScenePositionAxis('y', transform.y),
     z: clampScenePositionAxis('z', transform.z),
+  };
+}
+
+function normalizeFloorLightSettings(settings: FloorLightSettings): FloorLightSettings {
+  return {
+    opacity: clampFloorLightOpacity(settings.opacity),
+    x: clampFloorLightAxis('x', settings.x),
+    y: clampFloorLightAxis('y', settings.y),
+    z: clampFloorLightAxis('z', settings.z),
   };
 }
 
@@ -416,7 +445,7 @@ export function ChessScene({
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
-  const guiControllersRef = useRef<GuiControllers>({ floor: {}, pieces: [] });
+  const guiControllersRef = useRef<GuiControllers>({ floor: {}, floorLight: {}, pieces: [] });
   const resolvedFloorModelUrl = toText(floorModelUrl).trim() || defaultFloorModelUrl;
   const resolvedChessModelUrl = toText(chessModelUrl).trim() || defaultChessModelUrl;
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
@@ -428,6 +457,9 @@ export function ChessScene({
   const [animationActive, setAnimationActive] = useState(animationEnabled);
   const [floorTransform, setFloorTransform] = useState<SceneTransform>(() =>
     normalizeFloorTransform({ ...chessFloorTransformDefaults }),
+  );
+  const [floorLight, setFloorLight] = useState<FloorLightSettings>(() =>
+    normalizeFloorLightSettings({ ...chessFloorLightDefaults }),
   );
   const [pieceTransforms, setPieceTransforms] = useState<ChessPieceTransform[]>(() =>
     clonePieceTransforms(chessPieceDefaults),
@@ -518,7 +550,7 @@ export function ChessScene({
       guiRef.current?.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { floor: {}, pieces: [] };
+      guiControllersRef.current = { floor: {}, floorLight: {}, pieces: [] };
       return undefined;
     }
 
@@ -532,15 +564,20 @@ export function ChessScene({
       cameraY: cameraPosition.y,
       cameraZ: cameraPosition.z,
       floor: normalizeFloorTransform({ ...floorTransform }),
+      floorLight: normalizeFloorLightSettings({ ...floorLight }),
       pieces: clonePieceTransforms(pieceTransforms),
     };
 
     guiRef.current = gui;
     guiStateRef.current = guiState;
-    guiControllersRef.current = { floor: {}, pieces: [] };
+    guiControllersRef.current = { floor: {}, floorLight: {}, pieces: [] };
 
     const updateFloor = (partial: Partial<SceneTransform>) => {
       setFloorTransform((current) => normalizeFloorTransform({ ...current, ...partial }));
+    };
+
+    const updateFloorLight = (partial: Partial<FloorLightSettings>) => {
+      setFloorLight((current) => normalizeFloorLightSettings({ ...current, ...partial }));
     };
 
     const updatePiece = (index: number, partial: Partial<ChessPieceTransform>) => {
@@ -554,6 +591,7 @@ export function ChessScene({
     const cameraFolder = gui.addFolder('Camera');
     const animationFolder = gui.addFolder('Animation');
     const floorFolder = gui.addFolder('Floor');
+    const floorLightFolder = gui.addFolder('Floor Light');
     const piecesFolder = gui.addFolder('Pieces');
 
     guiControllersRef.current.animationEnabled = animationFolder
@@ -734,6 +772,69 @@ export function ChessScene({
       )
       .name('Reset Floor');
 
+    guiControllersRef.current.floorLight.x = floorLightFolder
+      .add(
+        guiState.floorLight,
+        'x',
+        chessFloorLightAxisControls.x.min,
+        chessFloorLightAxisControls.x.max,
+        chessFloorLightAxisControls.x.step,
+      )
+      .name(chessFloorLightAxisControls.x.label)
+      .onChange((value: number) => {
+        updateFloorLight({ x: clampFloorLightAxis('x', Number(value)) });
+      });
+
+    guiControllersRef.current.floorLight.y = floorLightFolder
+      .add(
+        guiState.floorLight,
+        'y',
+        chessFloorLightAxisControls.y.min,
+        chessFloorLightAxisControls.y.max,
+        chessFloorLightAxisControls.y.step,
+      )
+      .name(chessFloorLightAxisControls.y.label)
+      .onChange((value: number) => {
+        updateFloorLight({ y: clampFloorLightAxis('y', Number(value)) });
+      });
+
+    guiControllersRef.current.floorLight.z = floorLightFolder
+      .add(
+        guiState.floorLight,
+        'z',
+        chessFloorLightAxisControls.z.min,
+        chessFloorLightAxisControls.z.max,
+        chessFloorLightAxisControls.z.step,
+      )
+      .name(chessFloorLightAxisControls.z.label)
+      .onChange((value: number) => {
+        updateFloorLight({ z: clampFloorLightAxis('z', Number(value)) });
+      });
+
+    guiControllersRef.current.floorLight.opacity = floorLightFolder
+      .add(
+        guiState.floorLight,
+        'opacity',
+        chessFloorLightOpacityControl.min,
+        chessFloorLightOpacityControl.max,
+        chessFloorLightOpacityControl.step,
+      )
+      .name(chessFloorLightOpacityControl.label)
+      .onChange((value: number) => {
+        updateFloorLight({ opacity: clampFloorLightOpacity(Number(value)) });
+      });
+
+    floorLightFolder
+      .add(
+        {
+          reset: () => {
+            setFloorLight(normalizeFloorLightSettings({ ...chessFloorLightDefaults }));
+          },
+        },
+        'reset',
+      )
+      .name('Reset Light');
+
     piecesFolder
       .add(
         {
@@ -847,13 +948,14 @@ export function ChessScene({
     cameraFolder.close();
     animationFolder.close();
     floorFolder.close();
+    floorLightFolder.close();
     piecesFolder.close();
 
     return () => {
       gui.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { floor: {}, pieces: [] };
+      guiControllersRef.current = { floor: {}, floorLight: {}, pieces: [] };
     };
     // We only recreate lil-gui when it is toggled.
     // Live values are synced in the effect below.
@@ -873,6 +975,7 @@ export function ChessScene({
     guiState.cameraY = cameraPosition.y;
     guiState.cameraZ = cameraPosition.z;
     Object.assign(guiState.floor, normalizeFloorTransform(floorTransform));
+    Object.assign(guiState.floorLight, normalizeFloorLightSettings(floorLight));
     pieceTransforms.forEach((piece, index) => {
       const guiPiece = guiState.pieces[index];
 
@@ -895,6 +998,10 @@ export function ChessScene({
     guiControllersRef.current.floor.rotationY?.updateDisplay();
     guiControllersRef.current.floor.rotationZ?.updateDisplay();
     guiControllersRef.current.floor.scale?.updateDisplay();
+    guiControllersRef.current.floorLight.x?.updateDisplay();
+    guiControllersRef.current.floorLight.y?.updateDisplay();
+    guiControllersRef.current.floorLight.z?.updateDisplay();
+    guiControllersRef.current.floorLight.opacity?.updateDisplay();
 
     guiControllersRef.current.pieces.forEach((controllers) => {
       controllers.visible?.updateDisplay();
@@ -906,7 +1013,7 @@ export function ChessScene({
       controllers.rotationZ?.updateDisplay();
       controllers.scale?.updateDisplay();
     });
-  }, [animationActive, cameraMode, cameraPosition, floorTransform, pieceTransforms]);
+  }, [animationActive, cameraMode, cameraPosition, floorLight, floorTransform, pieceTransforms]);
 
   return (
     <section
@@ -936,6 +1043,7 @@ export function ChessScene({
         <ChessBoardScene
           animationEnabled={animationActive}
           chessModelUrl={resolvedChessModelUrl}
+          floorLight={floorLight}
           floorModelUrl={resolvedFloorModelUrl}
           floorTransform={floorTransform}
           modelScale={modelScale}
@@ -1128,6 +1236,7 @@ function SunRayBeams({ floorTransform }: { floorTransform: SceneTransform }) {
 function ChessBoardScene({
   animationEnabled,
   chessModelUrl,
+  floorLight,
   floorModelUrl,
   floorTransform,
   modelScale,
@@ -1166,6 +1275,13 @@ function ChessBoardScene({
         z: piece.z * preparedFloor.footprintDepth * 0.5,
       })),
     [pieceTransforms, preparedFloor.footprintDepth, preparedFloor.footprintWidth],
+  );
+  const floorLightSize = useMemo(
+    () => ({
+      depth: Math.max(preparedFloor.footprintDepth * 0.58, 0.6),
+      width: Math.max(preparedFloor.footprintWidth * 0.58, 0.6),
+    }),
+    [preparedFloor.footprintDepth, preparedFloor.footprintWidth],
   );
 
   useEffect(() => {
@@ -1219,6 +1335,11 @@ function ChessBoardScene({
         scale={[floorTransform.scale, floorTransform.scale, floorTransform.scale]}
       >
         <primitive object={preparedFloor.root} />
+        <FloorTopLight
+          depth={floorLightSize.depth}
+          settings={floorLight}
+          width={floorLightSize.width}
+        />
         {piecePositions.map((piece, index) =>
           piece.visible ? (
             <group
