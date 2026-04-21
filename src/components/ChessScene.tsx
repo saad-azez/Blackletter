@@ -16,6 +16,7 @@ import {
 } from 'react';
 import * as THREE from 'three';
 
+import battlefieldTextureUrl from '../assets/Textures/low_angle_battlefield_depth_of_field_pillars_cinema.jpeg';
 import {
   chessCameraAxisControls,
   chessFloorTransformDefaults,
@@ -912,8 +913,10 @@ export function ChessScene({
       className="scene-viewport"
       ref={sectionRef}
       style={{
-        background:
-          'radial-gradient(circle at 50% 25%, rgba(255, 246, 230, 0.44), transparent 44%), linear-gradient(180deg, #1f1815 0%, #0d0b0a 100%)',
+        backgroundImage: `radial-gradient(circle at 50% 25%, rgba(255, 246, 230, 0.26), transparent 44%), linear-gradient(180deg, rgba(31, 24, 21, 0.58) 0%, rgba(13, 11, 10, 0.82) 100%), url(${battlefieldTextureUrl})`,
+        backgroundPosition: 'center, center, center',
+        backgroundRepeat: 'no-repeat, no-repeat, no-repeat',
+        backgroundSize: 'auto, auto, cover',
       }}
     >
       <Canvas

@@ -1,7 +1,15 @@
 import { CastleScene } from './components/CastleScene';
+import { CharacterScene } from './components/CharacterScene';
 import { ChessScene } from './components/ChessScene';
 
-type SceneRoute = 'castle' | 'chess';
+type SceneRoute = 'castle' | 'character' | 'chess';
+
+const sceneRoutes = ['castle', 'character', 'chess'] as const satisfies readonly SceneRoute[];
+const sceneLabels = {
+  castle: 'Castle Scene',
+  character: 'Character Scene',
+  chess: 'Chess Scene',
+} as const satisfies Record<SceneRoute, string>;
 
 interface ParsedRoute {
   debug: boolean;
@@ -90,6 +98,8 @@ function parseRoute(pathname: string): ParsedRoute {
   const debug = segments.includes('debug');
   const scene = segments.includes('castle')
     ? 'castle'
+    : segments.includes('character')
+      ? 'character'
     : segments.includes('chess')
       ? 'chess'
       : null;
@@ -98,7 +108,10 @@ function parseRoute(pathname: string): ParsedRoute {
     return { debug: false, notFound: false, scene: null };
   }
 
-  if (scene && segments.every((segment) => ['castle', 'chess', 'debug'].includes(segment))) {
+  if (
+    scene &&
+    segments.every((segment) => ['castle', 'character', 'chess', 'debug'].includes(segment))
+  ) {
     return { debug, notFound: false, scene };
   }
 
@@ -125,12 +138,13 @@ function SceneChrome({ debug, scene }: { debug: boolean; scene: SceneRoute }) {
       <a href={routePath(scene, true)} style={shellStyles.badge}>
         {debug ? 'Debug Active' : 'Open Debug'}
       </a>
-      <a
-        href={routePath(scene === 'castle' ? 'chess' : 'castle')}
-        style={shellStyles.badge}
-      >
-        {scene === 'castle' ? 'Chess Scene' : 'Castle Scene'}
-      </a>
+      {sceneRoutes
+        .filter((route) => route !== scene)
+        .map((route) => (
+          <a key={route} href={routePath(route)} style={shellStyles.badge}>
+            {sceneLabels[route]}
+          </a>
+        ))}
     </div>
   );
 }
@@ -141,6 +155,8 @@ function ScenePage({ debug, scene }: { debug: boolean; scene: SceneRoute }) {
       <SceneChrome debug={debug} scene={scene} />
       {scene === 'castle' ? (
         <CastleScene animationEnabled modelScale={1} showGui={debug} />
+      ) : scene === 'character' ? (
+        <CharacterScene animationEnabled modelScale={1} showGui={debug} />
       ) : (
         <ChessScene animationEnabled modelScale={1} showGui={debug} />
       )}
@@ -186,7 +202,7 @@ function LandingPage({ debug }: { debug: boolean }) {
           <p style={{ ...shellStyles.paragraph, marginTop: '1rem', maxWidth: '48rem' }}>
             Open a clean client-facing page for each scene, or add `/debug` to the route to
             reveal the lil-gui controls. Supported examples: `/castle`, `/castle/debug`,
-            `/chess`, and `/chess/debug`.
+            `/character`, `/character/debug`, `/chess`, and `/chess/debug`.
           </p>
         </div>
         <div
@@ -201,6 +217,12 @@ function LandingPage({ debug }: { debug: boolean }) {
             debugHref={routePath('castle', true)}
             description="Castle environment preview with the clean client view by default."
             title="Castle Scene"
+          />
+          <SceneCard
+            clientHref={routePath('character')}
+            debugHref={routePath('character', true)}
+            description="Character scene preview with the same URL-based debug panel and animation controls."
+            title="Character Scene"
           />
           <SceneCard
             clientHref={routePath('chess')}
@@ -228,7 +250,8 @@ function NotFoundPage() {
         <span style={shellStyles.badge}>Page Not Found</span>
         <h1 style={{ ...shellStyles.pageTitle, marginTop: '1rem' }}>That route does not exist.</h1>
         <p style={{ ...shellStyles.paragraph, marginTop: '1rem' }}>
-          Try `/castle`, `/castle/debug`, `/chess`, or `/chess/debug`.
+          Try `/castle`, `/castle/debug`, `/character`, `/character/debug`, `/chess`, or
+          `/chess/debug`.
         </p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.25rem' }}>
           <a href="/" style={shellStyles.cardLink}>
@@ -236,6 +259,9 @@ function NotFoundPage() {
           </a>
           <a href={routePath('castle')} style={shellStyles.cardLink}>
             Castle Scene
+          </a>
+          <a href={routePath('character')} style={shellStyles.cardLink}>
+            Character Scene
           </a>
           <a href={routePath('chess')} style={shellStyles.cardLink}>
             Chess Scene
