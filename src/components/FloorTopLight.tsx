@@ -1,7 +1,11 @@
 import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 
+export const defaultFloorLightColor = '#fff7da';
+
 export interface FloorLightSettings {
+  color: string;
+  intensity: number;
   opacity: number;
   x: number;
   y: number;
@@ -63,13 +67,24 @@ export function clampFloorLightOpacity(value: number) {
   return THREE.MathUtils.clamp(value, 0, 1);
 }
 
+export function clampFloorLightIntensity(value: number) {
+  return THREE.MathUtils.clamp(value, 0, 4);
+}
+
 export function FloorTopLight({
-  color = '#fff7da',
+  color = defaultFloorLightColor,
   depth,
   settings,
   width,
 }: FloorTopLightProps) {
   const texture = useMemo(() => createFloorLightTexture(), []);
+  const lightColor = useMemo(
+    () =>
+      new THREE.Color(settings.color || color).multiplyScalar(
+        clampFloorLightIntensity(settings.intensity),
+      ),
+    [color, settings.color, settings.intensity],
+  );
 
   useEffect(() => {
     return () => {
@@ -77,7 +92,7 @@ export function FloorTopLight({
     };
   }, [texture]);
 
-  if (settings.opacity <= 0) {
+  if (settings.opacity <= 0 || settings.intensity <= 0) {
     return null;
   }
 
@@ -86,7 +101,7 @@ export function FloorTopLight({
       <planeGeometry args={[Math.max(width, 0.001), Math.max(depth, 0.001)]} />
       <meshBasicMaterial
         blending={THREE.AdditiveBlending}
-        color={color}
+        color={lightColor}
         depthWrite={false}
         map={texture}
         opacity={clampFloorLightOpacity(settings.opacity)}

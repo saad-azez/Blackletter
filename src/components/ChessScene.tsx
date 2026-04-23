@@ -20,7 +20,9 @@ import battlefieldTextureUrl from '../assets/Textures/low_angle_battlefield_dept
 import {
   chessCameraAxisControls,
   chessFloorLightAxisControls,
+  chessFloorLightColorControl,
   chessFloorLightDefaults,
+  chessFloorLightIntensityControl,
   chessFloorLightOpacityControl,
   chessFloorTransformDefaults,
   chessPerspectiveCamera,
@@ -33,7 +35,13 @@ import {
   type SceneCameraPosition,
   type SceneTransform,
 } from './ChessScene.config';
-import { FloorTopLight, clampFloorLightOpacity, type FloorLightSettings } from './FloorTopLight';
+import {
+  FloorTopLight,
+  clampFloorLightIntensity,
+  clampFloorLightOpacity,
+  defaultFloorLightColor,
+  type FloorLightSettings,
+} from './FloorTopLight';
 
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const cameraModes = ['Perspective', 'Orthographic'] as const;
@@ -80,6 +88,8 @@ interface TransformGuiControllers {
 }
 
 interface FloorLightGuiControllers {
+  color?: ReturnType<GUI['addColor']>;
+  intensity?: ReturnType<GUI['add']>;
   opacity?: ReturnType<GUI['add']>;
   x?: ReturnType<GUI['add']>;
   y?: ReturnType<GUI['add']>;
@@ -170,7 +180,7 @@ function clampScenePositionAxis(axis: keyof SceneCameraPosition, value: number) 
   return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function clampFloorLightAxis(axis: keyof Omit<FloorLightSettings, 'opacity'>, value: number) {
+function clampFloorLightAxis(axis: keyof Omit<FloorLightSettings, 'color' | 'intensity' | 'opacity'>, value: number) {
   const control = chessFloorLightAxisControls[axis];
 
   return THREE.MathUtils.clamp(value, control.min, control.max);
@@ -205,7 +215,11 @@ function normalizeFloorTransform(transform: SceneTransform): SceneTransform {
 }
 
 function normalizeFloorLightSettings(settings: FloorLightSettings): FloorLightSettings {
+  const normalizedColor = toText(settings.color).trim();
+
   return {
+    color: normalizedColor || defaultFloorLightColor,
+    intensity: clampFloorLightIntensity(settings.intensity),
     opacity: clampFloorLightOpacity(settings.opacity),
     x: clampFloorLightAxis('x', settings.x),
     y: clampFloorLightAxis('y', settings.y),
@@ -772,6 +786,13 @@ export function ChessScene({
       )
       .name('Reset Floor');
 
+    guiControllersRef.current.floorLight.color = floorLightFolder
+      .addColor(guiState.floorLight, 'color')
+      .name(chessFloorLightColorControl.label)
+      .onChange((value: string) => {
+        updateFloorLight({ color: toText(value).trim() || defaultFloorLightColor });
+      });
+
     guiControllersRef.current.floorLight.x = floorLightFolder
       .add(
         guiState.floorLight,
@@ -809,6 +830,19 @@ export function ChessScene({
       .name(chessFloorLightAxisControls.z.label)
       .onChange((value: number) => {
         updateFloorLight({ z: clampFloorLightAxis('z', Number(value)) });
+      });
+
+    guiControllersRef.current.floorLight.intensity = floorLightFolder
+      .add(
+        guiState.floorLight,
+        'intensity',
+        chessFloorLightIntensityControl.min,
+        chessFloorLightIntensityControl.max,
+        chessFloorLightIntensityControl.step,
+      )
+      .name(chessFloorLightIntensityControl.label)
+      .onChange((value: number) => {
+        updateFloorLight({ intensity: clampFloorLightIntensity(Number(value)) });
       });
 
     guiControllersRef.current.floorLight.opacity = floorLightFolder
@@ -998,9 +1032,11 @@ export function ChessScene({
     guiControllersRef.current.floor.rotationY?.updateDisplay();
     guiControllersRef.current.floor.rotationZ?.updateDisplay();
     guiControllersRef.current.floor.scale?.updateDisplay();
+    guiControllersRef.current.floorLight.color?.updateDisplay();
     guiControllersRef.current.floorLight.x?.updateDisplay();
     guiControllersRef.current.floorLight.y?.updateDisplay();
     guiControllersRef.current.floorLight.z?.updateDisplay();
+    guiControllersRef.current.floorLight.intensity?.updateDisplay();
     guiControllersRef.current.floorLight.opacity?.updateDisplay();
 
     guiControllersRef.current.pieces.forEach((controllers) => {

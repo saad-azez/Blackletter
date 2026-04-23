@@ -1,4 +1,4 @@
-import type { FloorLightSettings } from './FloorTopLight';
+import { defaultFloorLightColor, type FloorLightSettings } from './FloorTopLight';
 
 export interface SceneCameraPosition {
   x: number;
@@ -78,6 +78,8 @@ export const chessFloorTransformDefaults = {
 } as const satisfies SceneTransform;
 
 export const chessFloorLightDefaults = {
+  color: defaultFloorLightColor,
+  intensity: 1,
   opacity: 0.48,
   x: 0,
   y: 0.012,
@@ -216,7 +218,7 @@ export const chessFloorLightAxisControls = {
     step: 0.01,
   },
 } as const satisfies Record<
-  keyof Omit<FloorLightSettings, 'opacity'>,
+  keyof Omit<FloorLightSettings, 'color' | 'intensity' | 'opacity'>,
   {
     label: string;
     max: number;
@@ -235,6 +237,24 @@ export const chessFloorLightOpacityControl = {
   max: number;
   min: number;
   step: number;
+};
+
+export const chessFloorLightIntensityControl = {
+  label: 'Light Intensity',
+  max: 4,
+  min: 0,
+  step: 0.01,
+} as const satisfies {
+  label: string;
+  max: number;
+  min: number;
+  step: number;
+};
+
+export const chessFloorLightColorControl = {
+  label: 'Light Color',
+} as const satisfies {
+  label: string;
 };
 
 export const pieceLayoutAxisControls = {

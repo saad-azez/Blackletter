@@ -1,4 +1,4 @@
-import type { FloorLightSettings } from './FloorTopLight';
+import { defaultFloorLightColor, type FloorLightSettings } from './FloorTopLight';
 
 export interface SceneCameraPosition {
   x: number;
@@ -138,6 +138,8 @@ export const skyTransformDefaults = {
 } as const satisfies SkyTransform;
 
 export const castleFloorLightDefaults = {
+  color: defaultFloorLightColor,
+  intensity: 1,
   opacity: 0.42,
   x: 0,
   y: 0.012,
@@ -193,7 +195,7 @@ export const castleFloorLightAxisControls = {
     step: 0.01,
   },
 } as const satisfies Record<
-  keyof Omit<FloorLightSettings, 'opacity'>,
+  keyof Omit<FloorLightSettings, 'color' | 'intensity' | 'opacity'>,
   {
     label: string;
     max: number;
@@ -212,6 +214,24 @@ export const castleFloorLightOpacityControl = {
   max: number;
   min: number;
   step: number;
+};
+
+export const castleFloorLightIntensityControl = {
+  label: 'Light Intensity',
+  max: 4,
+  min: 0,
+  step: 0.01,
+} as const satisfies {
+  label: string;
+  max: number;
+  min: number;
+  step: number;
+};
+
+export const castleFloorLightColorControl = {
+  label: 'Light Color',
+} as const satisfies {
+  label: string;
 };
 
 export const towerRotationAxisControls = {

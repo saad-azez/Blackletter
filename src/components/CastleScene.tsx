@@ -15,7 +15,9 @@ import rocksTextureUrl from '../assets/Textures/rocks.png';
 import {
   castleCameraAxisControls,
   castleFloorLightAxisControls,
+  castleFloorLightColorControl,
   castleFloorLightDefaults,
+  castleFloorLightIntensityControl,
   castleFloorLightOpacityControl,
   castlePerspectiveCamera,
   castleTowerDefaults,
@@ -29,7 +31,13 @@ import {
   type SkyTransform,
   type TowerTransform,
 } from './CastleScene.config';
-import { FloorTopLight, clampFloorLightOpacity, type FloorLightSettings } from './FloorTopLight';
+import {
+  FloorTopLight,
+  clampFloorLightIntensity,
+  clampFloorLightOpacity,
+  defaultFloorLightColor,
+  type FloorLightSettings,
+} from './FloorTopLight';
 
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const cameraModes = ['Perspective', 'Orthographic'] as const;
@@ -105,6 +113,8 @@ interface TowerGuiControllers {
 }
 
 interface FloorLightGuiControllers {
+  color?: ReturnType<GUI['addColor']>;
+  intensity?: ReturnType<GUI['add']>;
   opacity?: ReturnType<GUI['add']>;
   x?: ReturnType<GUI['add']>;
   y?: ReturnType<GUI['add']>;
@@ -163,6 +173,11 @@ interface FloorScreenRect {
   width: number;
 }
 
+interface FloorSurfaceFootprint {
+  points: THREE.Vector3[];
+  size: THREE.Vector3;
+}
+
 function toText(value: unknown) {
   if (typeof value === 'string') {
     return value;
@@ -209,7 +224,7 @@ function clampTowerPositionAxis(axis: keyof SceneCameraPosition, value: number) 
   return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function clampFloorLightAxis(axis: keyof Omit<FloorLightSettings, 'opacity'>, value: number) {
+function clampFloorLightAxis(axis: keyof Omit<FloorLightSettings, 'color' | 'intensity' | 'opacity'>, value: number) {
   const control = castleFloorLightAxisControls[axis];
 
   return THREE.MathUtils.clamp(value, control.min, control.max);
@@ -240,7 +255,11 @@ function normalizeCastleTransform(transform: CastleTransform): CastleTransform {
 }
 
 function normalizeFloorLightSettings(settings: FloorLightSettings): FloorLightSettings {
+  const normalizedColor = toText(settings.color).trim();
+
   return {
+    color: normalizedColor || defaultFloorLightColor,
+    intensity: clampFloorLightIntensity(settings.intensity),
     opacity: clampFloorLightOpacity(settings.opacity),
     x: clampFloorLightAxis('x', settings.x),
     y: clampFloorLightAxis('y', settings.y),
@@ -331,30 +350,30 @@ function scaleScenePosition<T extends SceneCameraPosition>(position: T, factor: 
   };
 }
 
-function getProjectedScreenRect(
-  bounds: THREE.Box3,
+function getProjectedScreenRectFromPoints(
+  points: readonly THREE.Vector3[],
   camera: THREE.Camera,
   viewportWidth: number,
   viewportHeight: number,
+  transformMatrix?: THREE.Matrix4,
 ): FloorScreenRect | null {
-  const corners = [
-    new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.min.z),
-    new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.max.z),
-    new THREE.Vector3(bounds.min.x, bounds.max.y, bounds.min.z),
-    new THREE.Vector3(bounds.min.x, bounds.max.y, bounds.max.z),
-    new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.min.z),
-    new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.max.z),
-    new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.min.z),
-    new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.max.z),
-  ];
+  if (!points.length) {
+    return null;
+  }
 
   let minX = Number.POSITIVE_INFINITY;
   let maxX = Number.NEGATIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
 
-  corners.forEach((corner) => {
-    const projected = corner.clone().project(camera);
+  points.forEach((point) => {
+    const projected = point.clone();
+
+    if (transformMatrix) {
+      projected.applyMatrix4(transformMatrix);
+    }
+
+    projected.project(camera);
 
     minX = Math.min(minX, projected.x);
     maxX = Math.max(maxX, projected.x);
@@ -376,6 +395,53 @@ function getProjectedScreenRect(
     left,
     top,
     width: Math.max(right - left, 0),
+  };
+}
+
+function getFloorSurfaceFootprint(object: THREE.Object3D): FloorSurfaceFootprint {
+  object.updateMatrixWorld(true);
+
+  const objectBounds = new THREE.Box3().setFromObject(object);
+  const objectSize = objectBounds.getSize(new THREE.Vector3());
+  const topY = objectBounds.max.y;
+  const threshold = Math.max(objectSize.y * 0.18, 0.002);
+  const points: THREE.Vector3[] = [];
+  const vertex = new THREE.Vector3();
+
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+
+    const positionAttribute = child.geometry?.getAttribute('position');
+
+    if (!positionAttribute) {
+      return;
+    }
+
+    for (let index = 0; index < positionAttribute.count; index += 1) {
+      vertex.fromBufferAttribute(positionAttribute, index).applyMatrix4(child.matrixWorld);
+
+      if (vertex.y >= topY - threshold) {
+        points.push(vertex.clone());
+      }
+    }
+  });
+
+  if (!points.length) {
+    points.push(
+      new THREE.Vector3(objectBounds.min.x, topY, objectBounds.min.z),
+      new THREE.Vector3(objectBounds.min.x, topY, objectBounds.max.z),
+      new THREE.Vector3(objectBounds.max.x, topY, objectBounds.min.z),
+      new THREE.Vector3(objectBounds.max.x, topY, objectBounds.max.z),
+    );
+  }
+
+  const footprintBounds = new THREE.Box3().setFromPoints(points);
+
+  return {
+    points,
+    size: footprintBounds.getSize(new THREE.Vector3()),
   };
 }
 
@@ -484,7 +550,7 @@ export function CastleScene({
   skyTextureUrl = '',
   towerModelUrl = '',
 }: CastleSceneProps) {
-  const sectionRef = useRef<HTMLElement>(null);
+  const sectionRef = useRef<HTMLDivElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
@@ -991,6 +1057,13 @@ export function CastleScene({
       );
     };
 
+    guiControllersRef.current.floorLight.color = floorLightFolder
+      .addColor(guiState.floorLight, 'color')
+      .name(castleFloorLightColorControl.label)
+      .onChange((value: string) => {
+        updateFloorLight({ color: toText(value).trim() || defaultFloorLightColor });
+      });
+
     guiControllersRef.current.floorLight.x = floorLightFolder
       .add(
         guiState.floorLight,
@@ -1028,6 +1101,19 @@ export function CastleScene({
       .name(castleFloorLightAxisControls.z.label)
       .onChange((value: number) => {
         updateFloorLight({ z: clampFloorLightAxis('z', Number(value)) });
+      });
+
+    guiControllersRef.current.floorLight.intensity = floorLightFolder
+      .add(
+        guiState.floorLight,
+        'intensity',
+        castleFloorLightIntensityControl.min,
+        castleFloorLightIntensityControl.max,
+        castleFloorLightIntensityControl.step,
+      )
+      .name(castleFloorLightIntensityControl.label)
+      .onChange((value: number) => {
+        updateFloorLight({ intensity: clampFloorLightIntensity(Number(value)) });
       });
 
     guiControllersRef.current.floorLight.opacity = floorLightFolder
@@ -1239,9 +1325,11 @@ export function CastleScene({
     guiControllersRef.current.castle.x?.updateDisplay();
     guiControllersRef.current.castle.y?.updateDisplay();
     guiControllersRef.current.castle.z?.updateDisplay();
+    guiControllersRef.current.floorLight.color?.updateDisplay();
     guiControllersRef.current.floorLight.x?.updateDisplay();
     guiControllersRef.current.floorLight.y?.updateDisplay();
     guiControllersRef.current.floorLight.z?.updateDisplay();
+    guiControllersRef.current.floorLight.intensity?.updateDisplay();
     guiControllersRef.current.floorLight.opacity?.updateDisplay();
     guiControllersRef.current.sky.x?.updateDisplay();
     guiControllersRef.current.sky.y?.updateDisplay();
@@ -1265,42 +1353,58 @@ export function CastleScene({
 
   return (
     <section
-      className="scene-viewport"
-      ref={sectionRef}
+      className="castle-scene-shell"
       style={{
         background: 'transparent',
       }}
     >
-      <Canvas
-        dpr={[1, 1.5]}
-        gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
-        onCreated={({ gl }) => {
-          gl.setClearColor(0x000000, 0);
-        }}
-        style={{ position: 'absolute', inset: 0 }}
+      <div
+        className="scene-viewport castle-scene-viewport"
+        ref={sectionRef}
       >
-        <CastleSceneCamera
-          mode={cameraMode}
-          position={cameraPosition}
-          target={cameraTarget}
-        />
-        <CastleLighting />
-        <CastleModel
-          animationEnabled={animationActive}
-          castleTransform={castleTransform}
-          floorLight={floorLight}
-          floorModelUrl={resolvedFloorModelUrl}
-          key={[resolvedCastleModelUrl, resolvedTowerModelUrl, resolvedFloorModelUrl, resolvedSkyTextureUrl].join('::')}
-          modelScale={modelScale}
-          modelUrl={resolvedCastleModelUrl}
-          onFloorScreenRectChange={setFloorScreenRect}
-          pointerTarget={pointerTarget}
-          skyTextureUrl={resolvedSkyTextureUrl}
-          skyTransform={skyTransform}
-          towerModelUrl={resolvedTowerModelUrl}
-          towerTransforms={towerTransforms}
-        />
-      </Canvas>
+        <Canvas
+          dpr={[1, 1.5]}
+          gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+          onCreated={({ gl }) => {
+            gl.setClearColor(0x000000, 0);
+          }}
+          style={{ position: 'absolute', inset: 0 }}
+        >
+          <CastleSceneCamera
+            mode={cameraMode}
+            position={cameraPosition}
+            target={cameraTarget}
+          />
+          <CastleLighting />
+          <CastleModel
+            animationEnabled={animationActive}
+            castleTransform={castleTransform}
+            floorLight={floorLight}
+            floorModelUrl={resolvedFloorModelUrl}
+            key={[resolvedCastleModelUrl, resolvedTowerModelUrl, resolvedFloorModelUrl, resolvedSkyTextureUrl].join('::')}
+            modelScale={modelScale}
+            modelUrl={resolvedCastleModelUrl}
+            onFloorScreenRectChange={setFloorScreenRect}
+            pointerTarget={pointerTarget}
+            skyTextureUrl={resolvedSkyTextureUrl}
+            skyTransform={skyTransform}
+            towerModelUrl={resolvedTowerModelUrl}
+            towerTransforms={towerTransforms}
+          />
+        </Canvas>
+        {showGui ? (
+          <div
+            ref={guiRootRef}
+            style={{
+              position: 'absolute',
+              top: 16,
+              right: 16,
+              zIndex: 5,
+              pointerEvents: 'auto',
+            }}
+          />
+        ) : null}
+      </div>
       <img
         aria-hidden="true"
         alt=""
@@ -1309,28 +1413,16 @@ export function CastleScene({
           position: 'absolute',
           left: 0,
           right: 0,
-          bottom: '0%',
+          bottom: 0,
           zIndex: 4,
           pointerEvents: 'none',
           userSelect: 'none',
           width: '100%',
-          height: '85%',
+          height: '85vh',
           objectFit: 'cover',
           objectPosition: 'center bottom',
         }}
       />
-      {showGui ? (
-        <div
-          ref={guiRootRef}
-          style={{
-            position: 'absolute',
-            top: 16,
-            right: 16,
-            zIndex: 5,
-            pointerEvents: 'auto',
-          }}
-        />
-      ) : null}
     </section>
   );
 }
@@ -1386,6 +1478,10 @@ function CastleModel({
     [floorGltf.scene, preparedCastle.worldScale],
   );
   const preparedSkyTexture = useMemo(() => prepareSkyTexture(skyTexture), [skyTexture]);
+  const preparedFloorSurface = useMemo(
+    () => getFloorSurfaceFootprint(preparedFloor),
+    [preparedFloor],
+  );
   const referenceWorldScale = useMemo(() => {
     const bounds = new THREE.Box3().setFromObject(gltf.scene);
     const sceneSize = bounds.getSize(new THREE.Vector3());
@@ -1479,53 +1575,143 @@ function CastleModel({
       size,
     };
   }, [attachedTower, detachedTowers, preparedCastle.root, preparedTower, responsiveCastleTransform]);
-  const floorCoverageScale = useMemo(() => {
-    const floorBounds = new THREE.Box3().setFromObject(preparedFloor);
-    const floorSize = floorBounds.getSize(new THREE.Vector3());
+  const floorPosition = useMemo(
+    () => new THREE.Vector3(compositionBounds.center.x, compositionBounds.baseY - 0.02, compositionBounds.center.z),
+    [compositionBounds.baseY, compositionBounds.center.x, compositionBounds.center.z],
+  );
+  const compositionFloorScale = useMemo(() => {
     const paddedWidth = compositionBounds.size.x * 1.18;
     const paddedDepth = compositionBounds.size.z * 1.18;
 
     return Math.max(
-      paddedWidth / Math.max(floorSize.x, 0.001),
-      paddedDepth / Math.max(floorSize.z, 0.001),
+      paddedWidth / Math.max(preparedFloorSurface.size.x, 0.001),
+      paddedDepth / Math.max(preparedFloorSurface.size.z, 0.001),
       1,
     );
-  }, [compositionBounds.size.x, compositionBounds.size.z, preparedFloor]);
-  const floorLightSize = useMemo(() => {
-    const floorBounds = new THREE.Box3().setFromObject(preparedFloor);
-    const floorSize = floorBounds.getSize(new THREE.Vector3());
+  }, [
+    compositionBounds.size.x,
+    compositionBounds.size.z,
+    preparedFloorSurface.size.x,
+    preparedFloorSurface.size.z,
+  ]);
+  const preparedFloorFrontEdgePoints = useMemo(() => {
+    if (!preparedFloorSurface.points.length) {
+      return preparedFloorSurface.points;
+    }
+
+    const dominantAxis =
+      Math.abs(camera.position.z - floorPosition.z) >= Math.abs(camera.position.x - floorPosition.x)
+        ? 'z'
+        : 'x';
+    const frontAxisValue = preparedFloorSurface.points.reduce((result, point) => {
+      const axisValue = dominantAxis === 'z' ? point.z : point.x;
+
+      if (dominantAxis === 'z') {
+        return camera.position.z >= floorPosition.z ? Math.max(result, axisValue) : Math.min(result, axisValue);
+      }
+
+      return camera.position.x >= floorPosition.x ? Math.max(result, axisValue) : Math.min(result, axisValue);
+    }, dominantAxis === 'z'
+      ? camera.position.z >= floorPosition.z
+        ? Number.NEGATIVE_INFINITY
+        : Number.POSITIVE_INFINITY
+      : camera.position.x >= floorPosition.x
+        ? Number.NEGATIVE_INFINITY
+        : Number.POSITIVE_INFINITY);
+    const axisRange =
+      dominantAxis === 'z' ? preparedFloorSurface.size.z : preparedFloorSurface.size.x;
+    const threshold = Math.max(axisRange * 0.08, 0.02);
+    const edgePoints = preparedFloorSurface.points.filter((point) => {
+      const axisValue = dominantAxis === 'z' ? point.z : point.x;
+
+      if (dominantAxis === 'z') {
+        return camera.position.z >= floorPosition.z
+          ? axisValue >= frontAxisValue - threshold
+          : axisValue <= frontAxisValue + threshold;
+      }
+
+      return camera.position.x >= floorPosition.x
+        ? axisValue >= frontAxisValue - threshold
+        : axisValue <= frontAxisValue + threshold;
+    });
+
+    return edgePoints.length ? edgePoints : preparedFloorSurface.points;
+  }, [camera.position.x, camera.position.z, floorPosition.x, floorPosition.z, preparedFloorSurface.points, preparedFloorSurface.size.x, preparedFloorSurface.size.z]);
+  const compositionFloorMatrix = useMemo(
+    () =>
+      new THREE.Matrix4().compose(
+        floorPosition.clone(),
+        new THREE.Quaternion(),
+        new THREE.Vector3(compositionFloorScale, 1, compositionFloorScale),
+      ),
+    [compositionFloorScale, floorPosition],
+  );
+  const compositionFloorScreenRect = useMemo(() => {
+    if (!size.width || !size.height) {
+      return null;
+    }
+
+    return getProjectedScreenRectFromPoints(
+      preparedFloorFrontEdgePoints,
+      camera,
+      size.width,
+      size.height,
+      compositionFloorMatrix,
+    );
+  }, [
+    camera,
+    compositionFloorMatrix,
+    preparedFloorFrontEdgePoints,
+    size.height,
+    size.width,
+  ]);
+  const widthFillMultiplier = useMemo(
+    () =>
+      compositionFloorScreenRect?.width
+        ? (size.width * 1.04) / Math.max(compositionFloorScreenRect.width, 1)
+        : 1,
+    [compositionFloorScreenRect?.width, size.width],
+  );
+  const floorScale = useMemo(() => {
 
     return {
-      depth: Math.max(floorSize.z * 0.54, 0.8),
-      width: Math.max(floorSize.x * 0.54, 0.8),
+      x: compositionFloorScale * Math.max(widthFillMultiplier, 1),
+      z: compositionFloorScale,
     };
-  }, [preparedFloor]);
+  }, [compositionFloorScale, widthFillMultiplier]);
+  const floorLightSize = useMemo(() => {
+    return {
+      depth: Math.max(preparedFloorSurface.size.z * 0.54, 0.8),
+      width: Math.max(preparedFloorSurface.size.x * 0.54, 0.8),
+    };
+  }, [preparedFloorSurface.size.x, preparedFloorSurface.size.z]);
+  const floorMatrix = useMemo(
+    () =>
+      new THREE.Matrix4().compose(
+        floorPosition.clone(),
+        new THREE.Quaternion(),
+        new THREE.Vector3(floorScale.x, 1, floorScale.z),
+      ),
+    [floorPosition, floorScale.x, floorScale.z],
+  );
   const floorScreenRect = useMemo(() => {
     if (!size.width || !size.height) {
       return null;
     }
 
-    const floorGroup = new THREE.Group();
-
-    floorGroup.position.set(
-      compositionBounds.center.x,
-      compositionBounds.baseY - 0.02,
-      compositionBounds.center.z,
+    return getProjectedScreenRectFromPoints(
+      preparedFloorSurface.points,
+      camera,
+      size.width,
+      size.height,
+      floorMatrix,
     );
-    floorGroup.scale.set(floorCoverageScale, 1, floorCoverageScale);
-    floorGroup.add(preparedFloor.clone(true));
-    floorGroup.updateMatrixWorld(true);
-
-    const bounds = new THREE.Box3().setFromObject(floorGroup);
-
-    return getProjectedScreenRect(bounds, camera, size.width, size.height);
   }, [
     camera,
-    compositionBounds.baseY,
-    compositionBounds.center.x,
-    compositionBounds.center.z,
-    floorCoverageScale,
-    preparedFloor,
+    floorMatrix,
+    floorScale.x,
+    floorScale.z,
+    preparedFloorSurface.points,
     size.height,
     size.width,
   ]);
@@ -1589,8 +1775,8 @@ function CastleModel({
         <meshBasicMaterial map={preparedSkyTexture} toneMapped={false} />
       </mesh>
       <group
-        position={[compositionBounds.center.x, compositionBounds.baseY - 0.02, compositionBounds.center.z]}
-        scale={[floorCoverageScale, 1, floorCoverageScale]}
+        position={[floorPosition.x, floorPosition.y, floorPosition.z]}
+        scale={[floorScale.x, 1, floorScale.z]}
       >
         <primitive object={preparedFloor} />
         <FloorTopLight

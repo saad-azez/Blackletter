@@ -52,3 +52,68 @@ canvas {
   height: 100dvh;
   overflow: hidden;
 }
+
+.castle-scene-shell {
+  position: relative;
+  width: 100%;
+  min-height: 200vh;
+  min-height: 200svh;
+  height: 200vh;
+  height: 200svh;
+  height: 200dvh;
+}
+
+@media (max-width: 1536px) {
+  .castle-scene-shell {
+    min-height: 185vh;
+    min-height: 185svh;
+    height: 185vh;
+    height: 185svh;
+    height: 185dvh;
+  }
+}
+
+@media (max-width: 1280px) {
+  .castle-scene-shell {
+    min-height: 170vh;
+    min-height: 170svh;
+    height: 170vh;
+    height: 170svh;
+    height: 170dvh;
+  }
+}
+
+@media (max-width: 1024px) {
+  .castle-scene-shell {
+    min-height: 150vh;
+    min-height: 150svh;
+    height: 150vh;
+    height: 150svh;
+    height: 150dvh;
+  }
+}
+
+@media (max-width: 767px) {
+  .castle-scene-shell {
+    min-height: 130vh;
+    min-height: 130svh;
+    height: 130vh;
+    height: 130svh;
+    height: 130dvh;
+  }
+}
+
+@media (max-width: 479px) {
+  .castle-scene-shell {
+    min-height: 115vh;
+    min-height: 115svh;
+    height: 115vh;
+    height: 115svh;
+    height: 115dvh;
+  }
+}
+
+.castle-scene-viewport {
+  position: sticky;
+  top: 0;
+}
