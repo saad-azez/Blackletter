@@ -28,10 +28,23 @@ export interface CastleTransform {
 }
 
 export interface SkyTransform {
+  planeHeight: number;
+  planeWidth: number;
   rotationX: number;
   rotationY: number;
   rotationZ: number;
   scale: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface CastleFloorTransform {
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  scale: number;
+  visible: boolean;
   x: number;
   y: number;
   z: number;
@@ -128,6 +141,8 @@ export const castleTransformDefaults = {
 } as const satisfies CastleTransform;
 
 export const skyTransformDefaults = {
+  planeHeight: 12,
+  planeWidth: 18,
   rotationX: 0,
   rotationY: 0,
   rotationZ: 0,
@@ -137,8 +152,43 @@ export const skyTransformDefaults = {
   z: -4,
 } as const satisfies SkyTransform;
 
+export const castleFloorTransformDefaults = {
+  rotationX: 0,
+  rotationY: 0,
+  rotationZ: 0,
+  scale: 1,
+  visible: true,
+  x: 0,
+  y: 0,
+  z: 0,
+} as const satisfies CastleFloorTransform;
+
+export const castleVortexPlaneControls = {
+  planeHeight: {
+    label: 'Plane Y',
+    max: 80,
+    min: 1,
+    step: 0.1,
+  },
+  planeWidth: {
+    label: 'Plane X',
+    max: 80,
+    min: 1,
+    step: 0.1,
+  },
+} as const satisfies Record<
+  'planeHeight' | 'planeWidth',
+  {
+    label: string;
+    max: number;
+    min: number;
+    step: number;
+  }
+>;
+
 export const castleFloorLightDefaults = {
   color: defaultFloorLightColor,
+  enabled: true,
   intensity: 1,
   opacity: 0.42,
   x: 0,
@@ -195,7 +245,7 @@ export const castleFloorLightAxisControls = {
     step: 0.01,
   },
 } as const satisfies Record<
-  keyof Omit<FloorLightSettings, 'color' | 'intensity' | 'opacity'>,
+  'x' | 'y' | 'z',
   {
     label: string;
     max: number;
@@ -230,6 +280,18 @@ export const castleFloorLightIntensityControl = {
 
 export const castleFloorLightColorControl = {
   label: 'Light Color',
+} as const satisfies {
+  label: string;
+};
+
+export const castleFloorLightEnabledControl = {
+  label: 'Enabled',
+} as const satisfies {
+  label: string;
+};
+
+export const castleLightsControl = {
+  label: 'Enabled',
 } as const satisfies {
   label: string;
 };

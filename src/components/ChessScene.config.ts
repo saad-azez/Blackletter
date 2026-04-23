@@ -16,6 +16,10 @@ export interface SceneTransform {
   z: number;
 }
 
+export interface ChessFloorMeshTransform extends SceneTransform {
+  visible: boolean;
+}
+
 export interface ChessPieceTransform extends SceneTransform {
   visible: boolean;
 }
@@ -77,8 +81,20 @@ export const chessFloorTransformDefaults = {
   z: 0,
 } as const satisfies SceneTransform;
 
+export const chessFloorMeshTransformDefaults = {
+  rotationX: 0,
+  rotationY: 0,
+  rotationZ: 0,
+  scale: 1,
+  visible: true,
+  x: 0,
+  y: 0,
+  z: 0,
+} as const satisfies ChessFloorMeshTransform;
+
 export const chessFloorLightDefaults = {
   color: defaultFloorLightColor,
+  enabled: true,
   intensity: 1,
   opacity: 0.48,
   x: 0,
@@ -218,7 +234,7 @@ export const chessFloorLightAxisControls = {
     step: 0.01,
   },
 } as const satisfies Record<
-  keyof Omit<FloorLightSettings, 'color' | 'intensity' | 'opacity'>,
+  'x' | 'y' | 'z',
   {
     label: string;
     max: number;
@@ -253,6 +269,18 @@ export const chessFloorLightIntensityControl = {
 
 export const chessFloorLightColorControl = {
   label: 'Light Color',
+} as const satisfies {
+  label: string;
+};
+
+export const chessFloorLightEnabledControl = {
+  label: 'Enabled',
+} as const satisfies {
+  label: string;
+};
+
+export const chessLightsControl = {
+  label: 'Enabled',
 } as const satisfies {
   label: string;
 };

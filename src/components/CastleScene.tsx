@@ -10,22 +10,28 @@ import GUI from 'lil-gui';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 
+import { DebugOrbitControls } from './DebugOrbitControls';
 import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.png';
 import rocksTextureUrl from '../assets/Textures/rocks.png';
 import {
   castleCameraAxisControls,
+  castleFloorTransformDefaults,
   castleFloorLightAxisControls,
   castleFloorLightColorControl,
   castleFloorLightDefaults,
+  castleFloorLightEnabledControl,
   castleFloorLightIntensityControl,
   castleFloorLightOpacityControl,
+  castleLightsControl,
   castlePerspectiveCamera,
   castleTowerDefaults,
   castleTransformDefaults,
+  castleVortexPlaneControls,
   skyTransformDefaults,
   uniformScaleControl,
   towerPositionAxisControls,
   towerRotationAxisControls,
+  type CastleFloorTransform,
   type CastleTransform,
   type SceneCameraPosition,
   type SkyTransform,
@@ -76,7 +82,9 @@ interface GuiState {
   cameraY: number;
   cameraZ: number;
   castle: CastleTransform;
+  floor: CastleFloorTransform;
   floorLight: FloorLightSettings;
+  lightsEnabled: boolean;
   sky: SkyTransform;
   towers: TowerTransform[];
 }
@@ -92,13 +100,11 @@ interface CastleGuiControllers {
 }
 
 interface SkyGuiControllers {
+  planeHeight?: ReturnType<GUI['add']>;
+  planeWidth?: ReturnType<GUI['add']>;
   rotationX?: ReturnType<GUI['add']>;
   rotationY?: ReturnType<GUI['add']>;
   rotationZ?: ReturnType<GUI['add']>;
-  scale?: ReturnType<GUI['add']>;
-  x?: ReturnType<GUI['add']>;
-  y?: ReturnType<GUI['add']>;
-  z?: ReturnType<GUI['add']>;
 }
 
 interface TowerGuiControllers {
@@ -114,6 +120,7 @@ interface TowerGuiControllers {
 
 interface FloorLightGuiControllers {
   color?: ReturnType<GUI['addColor']>;
+  enabled?: ReturnType<GUI['add']>;
   intensity?: ReturnType<GUI['add']>;
   opacity?: ReturnType<GUI['add']>;
   x?: ReturnType<GUI['add']>;
@@ -129,7 +136,9 @@ interface GuiControllers {
   cameraY?: ReturnType<GUI['add']>;
   cameraZ?: ReturnType<GUI['add']>;
   castle: CastleGuiControllers;
+  floor: TowerGuiControllers;
   floorLight: FloorLightGuiControllers;
+  lightsEnabled?: ReturnType<GUI['add']>;
   sky: SkyGuiControllers;
   towers: TowerGuiControllers[];
 }
@@ -137,12 +146,15 @@ interface GuiControllers {
 interface CastleModelProps {
   animationEnabled: boolean;
   castleTransform: CastleTransform;
+  floorTransform: CastleFloorTransform;
   floorLight: FloorLightSettings;
   floorModelUrl: string;
+  lightsEnabled: boolean;
   modelScale: number;
   modelUrl: string;
   onFloorScreenRectChange: (screenRect: FloorScreenRect | null) => void;
   pointerTarget: MutableRefObject<THREE.Vector2>;
+  sceneHeightRatio: number;
   skyTextureUrl: string;
   skyTransform: SkyTransform;
   towerModelUrl: string;
@@ -159,11 +171,6 @@ interface PreparedSceneResult {
   baseY: number;
   root: THREE.Group;
   worldScale: number;
-}
-
-interface CameraSnapshot {
-  position: SceneCameraPosition;
-  target: SceneCameraPosition;
 }
 
 interface FloorScreenRect {
@@ -224,7 +231,13 @@ function clampTowerPositionAxis(axis: keyof SceneCameraPosition, value: number) 
   return THREE.MathUtils.clamp(value, control.min, control.max);
 }
 
-function clampFloorLightAxis(axis: keyof Omit<FloorLightSettings, 'color' | 'intensity' | 'opacity'>, value: number) {
+function clampVortexPlaneAxis(axis: 'planeHeight' | 'planeWidth', value: number) {
+  const control = castleVortexPlaneControls[axis];
+
+  return THREE.MathUtils.clamp(value, control.min, control.max);
+}
+
+function clampFloorLightAxis(axis: 'x' | 'y' | 'z', value: number) {
   const control = castleFloorLightAxisControls[axis];
 
   return THREE.MathUtils.clamp(value, control.min, control.max);
@@ -259,11 +272,25 @@ function normalizeFloorLightSettings(settings: FloorLightSettings): FloorLightSe
 
   return {
     color: normalizedColor || defaultFloorLightColor,
+    enabled: settings.enabled !== false,
     intensity: clampFloorLightIntensity(settings.intensity),
     opacity: clampFloorLightOpacity(settings.opacity),
     x: clampFloorLightAxis('x', settings.x),
     y: clampFloorLightAxis('y', settings.y),
     z: clampFloorLightAxis('z', settings.z),
+  };
+}
+
+function normalizeFloorTransform(transform: CastleFloorTransform): CastleFloorTransform {
+  return {
+    rotationX: clampTowerRotationAxis('x', transform.rotationX),
+    rotationY: clampTowerRotationAxis('y', transform.rotationY),
+    rotationZ: clampTowerRotationAxis('z', transform.rotationZ),
+    scale: clampUniformScale(transform.scale),
+    visible: transform.visible,
+    x: clampTowerPositionAxis('x', transform.x),
+    y: clampTowerPositionAxis('y', transform.y),
+    z: clampTowerPositionAxis('z', transform.z),
   };
 }
 
@@ -282,6 +309,8 @@ function normalizeTowerTransform(tower: TowerTransform): TowerTransform {
 
 function normalizeSkyTransform(transform: SkyTransform): SkyTransform {
   return {
+    planeHeight: clampVortexPlaneAxis('planeHeight', transform.planeHeight),
+    planeWidth: clampVortexPlaneAxis('planeWidth', transform.planeWidth),
     rotationX: clampTowerRotationAxis('x', transform.rotationX),
     rotationY: clampTowerRotationAxis('y', transform.rotationY),
     rotationZ: clampTowerRotationAxis('z', transform.rotationZ),
@@ -550,6 +579,7 @@ export function CastleScene({
   skyTextureUrl = '',
   towerModelUrl = '',
 }: CastleSceneProps) {
+  const shellRef = useRef<HTMLElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
   const guiRootRef = useRef<HTMLDivElement>(null);
@@ -557,13 +587,10 @@ export function CastleScene({
   const guiStateRef = useRef<GuiState | null>(null);
   const guiControllersRef = useRef<GuiControllers>({
     castle: {},
+    floor: {},
     floorLight: {},
     sky: {},
     towers: [],
-  });
-  const cameraSnapshotRef = useRef<CameraSnapshot>({
-    position: { ...castlePerspectiveCamera.position },
-    target: { ...castlePerspectiveCamera.lookAt },
   });
 
   const resolvedCastleModelUrl =
@@ -581,10 +608,15 @@ export function CastleScene({
   const [cameraTarget, setCameraTarget] = useState<SceneCameraPosition>(() => ({
     ...castlePerspectiveCamera.lookAt,
   }));
-  const [cameraLocked, setCameraLocked] = useState(false);
+  const [cameraLocked, setCameraLocked] = useState(true);
   const [animationActive, setAnimationActive] = useState(animationEnabled);
+  const [lightsEnabled, setLightsEnabled] = useState(true);
+  const [sceneHeightRatio, setSceneHeightRatio] = useState(2);
   const [castleTransform, setCastleTransform] = useState<CastleTransform>(() =>
     normalizeCastleTransform({ ...castleTransformDefaults }),
+  );
+  const [floorTransform, setFloorTransform] = useState<CastleFloorTransform>(() =>
+    normalizeFloorTransform({ ...castleFloorTransformDefaults }),
   );
   const [floorLight, setFloorLight] = useState<FloorLightSettings>(() =>
     normalizeFloorLightSettings({ ...castleFloorLightDefaults }),
@@ -617,8 +649,15 @@ export function CastleScene({
       return undefined;
     }
 
+    const updateSceneHeightRatio = () => {
+      const shellHeight = shellRef.current?.getBoundingClientRect().height ?? window.innerHeight;
+
+      setSceneHeightRatio(Math.max(shellHeight / Math.max(window.innerHeight, 1), 1));
+    };
+
     const updateViewportMode = () => {
       setIsMobileViewport(window.innerWidth <= 767);
+      updateSceneHeightRatio();
     };
 
     updateViewportMode();
@@ -699,7 +738,7 @@ export function CastleScene({
       guiRef.current?.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { castle: {}, floorLight: {}, sky: {}, towers: [] };
+      guiControllersRef.current = { castle: {}, floor: {}, floorLight: {}, sky: {}, towers: [] };
       return undefined;
     }
 
@@ -713,17 +752,21 @@ export function CastleScene({
       cameraY: cameraPosition.y,
       cameraZ: cameraPosition.z,
       castle: normalizeCastleTransform({ ...castleTransform }),
+      floor: normalizeFloorTransform({ ...floorTransform }),
       floorLight: normalizeFloorLightSettings({ ...floorLight }),
+      lightsEnabled,
       sky: normalizeSkyTransform({ ...skyTransform }),
       towers: cloneTowerTransforms(towerTransforms),
     };
 
     const gui = new GUI({ autoPlace: false, title: 'Castle GUI', width: 320 });
     const cameraFolder = gui.addFolder('Camera');
+    const lightsFolder = gui.addFolder('Lights');
     const animationFolder = gui.addFolder('Animation');
     const castleFolder = gui.addFolder('Castle');
+    const floorFolder = gui.addFolder('Floor');
     const floorLightFolder = gui.addFolder('Floor Light');
-    const skyFolder = gui.addFolder('Sky');
+    const skyFolder = gui.addFolder('Vortex');
 
     guiRootRef.current.appendChild(gui.domElement);
     guiRef.current = gui;
@@ -744,18 +787,9 @@ export function CastleScene({
         }),
       cameraLocked: cameraFolder
         .add(guiState, 'cameraLocked')
-        .name('Lock Orbit')
+        .name('Orbit Controls')
         .onChange((value: boolean) => {
-          if (value) {
-            const snapshot = cameraSnapshotRef.current;
-
-            setCameraPosition({ ...snapshot.position });
-            setCameraTarget({ ...snapshot.target });
-            setCameraLocked(true);
-            return;
-          }
-
-          setCameraLocked(false);
+          setCameraLocked(Boolean(value));
         }),
       cameraX: cameraFolder
         .add(
@@ -802,6 +836,7 @@ export function CastleScene({
             z: clampCameraAxis('z', Number(value)),
           }));
         }),
+      floor: {},
       castle: {
         x: castleFolder
           .add(
@@ -924,72 +959,44 @@ export function CastleScene({
           }),
       },
       floorLight: {},
+      lightsEnabled: lightsFolder
+        .add(guiState, 'lightsEnabled')
+        .name(castleLightsControl.label)
+        .onChange((value: boolean) => {
+          setLightsEnabled(Boolean(value));
+        }),
       sky: {
-        scale: skyFolder
+        planeWidth: skyFolder
           .add(
             guiState.sky,
-            'scale',
-            uniformScaleControl.min,
-            uniformScaleControl.max,
-            uniformScaleControl.step,
+            'planeWidth',
+            castleVortexPlaneControls.planeWidth.min,
+            castleVortexPlaneControls.planeWidth.max,
+            castleVortexPlaneControls.planeWidth.step,
           )
-          .name(uniformScaleControl.label)
+          .name(castleVortexPlaneControls.planeWidth.label)
           .onChange((value: number) => {
             setSkyTransform((currentValue) =>
               normalizeSkyTransform({
                 ...currentValue,
-                scale: Number(value),
+                planeWidth: Number(value),
               }),
             );
           }),
-        x: skyFolder
+        planeHeight: skyFolder
           .add(
             guiState.sky,
-            'x',
-            towerPositionAxisControls.x.min,
-            towerPositionAxisControls.x.max,
-            towerPositionAxisControls.x.step,
+            'planeHeight',
+            castleVortexPlaneControls.planeHeight.min,
+            castleVortexPlaneControls.planeHeight.max,
+            castleVortexPlaneControls.planeHeight.step,
           )
-          .name(towerPositionAxisControls.x.label)
+          .name(castleVortexPlaneControls.planeHeight.label)
           .onChange((value: number) => {
             setSkyTransform((currentValue) =>
               normalizeSkyTransform({
                 ...currentValue,
-                x: Number(value),
-              }),
-            );
-          }),
-        y: skyFolder
-          .add(
-            guiState.sky,
-            'y',
-            towerPositionAxisControls.y.min,
-            towerPositionAxisControls.y.max,
-            towerPositionAxisControls.y.step,
-          )
-          .name(towerPositionAxisControls.y.label)
-          .onChange((value: number) => {
-            setSkyTransform((currentValue) =>
-              normalizeSkyTransform({
-                ...currentValue,
-                y: Number(value),
-              }),
-            );
-          }),
-        z: skyFolder
-          .add(
-            guiState.sky,
-            'z',
-            towerPositionAxisControls.z.min,
-            towerPositionAxisControls.z.max,
-            towerPositionAxisControls.z.step,
-          )
-          .name(towerPositionAxisControls.z.label)
-          .onChange((value: number) => {
-            setSkyTransform((currentValue) =>
-              normalizeSkyTransform({
-                ...currentValue,
-                z: Number(value),
+                planeHeight: Number(value),
               }),
             );
           }),
@@ -1056,6 +1063,131 @@ export function CastleScene({
         }),
       );
     };
+
+    const updateFloor = (partial: Partial<CastleFloorTransform>) => {
+      setFloorTransform((currentValue) =>
+        normalizeFloorTransform({
+          ...currentValue,
+          ...partial,
+        }),
+      );
+    };
+
+    guiControllersRef.current.floor.visible = floorFolder
+      .add(guiState.floor, 'visible')
+      .name('Visible')
+      .onChange((value: boolean) => {
+        updateFloor({ visible: Boolean(value) });
+      });
+
+    guiControllersRef.current.floor.x = floorFolder
+      .add(
+        guiState.floor,
+        'x',
+        towerPositionAxisControls.x.min,
+        towerPositionAxisControls.x.max,
+        towerPositionAxisControls.x.step,
+      )
+      .name(towerPositionAxisControls.x.label)
+      .onChange((value: number) => {
+        updateFloor({ x: clampTowerPositionAxis('x', Number(value)) });
+      });
+
+    guiControllersRef.current.floor.y = floorFolder
+      .add(
+        guiState.floor,
+        'y',
+        towerPositionAxisControls.y.min,
+        towerPositionAxisControls.y.max,
+        towerPositionAxisControls.y.step,
+      )
+      .name(towerPositionAxisControls.y.label)
+      .onChange((value: number) => {
+        updateFloor({ y: clampTowerPositionAxis('y', Number(value)) });
+      });
+
+    guiControllersRef.current.floor.z = floorFolder
+      .add(
+        guiState.floor,
+        'z',
+        towerPositionAxisControls.z.min,
+        towerPositionAxisControls.z.max,
+        towerPositionAxisControls.z.step,
+      )
+      .name(towerPositionAxisControls.z.label)
+      .onChange((value: number) => {
+        updateFloor({ z: clampTowerPositionAxis('z', Number(value)) });
+      });
+
+    guiControllersRef.current.floor.rotationX = floorFolder
+      .add(
+        guiState.floor,
+        'rotationX',
+        towerRotationAxisControls.x.min,
+        towerRotationAxisControls.x.max,
+        towerRotationAxisControls.x.step,
+      )
+      .name(towerRotationAxisControls.x.label)
+      .onChange((value: number) => {
+        updateFloor({ rotationX: clampTowerRotationAxis('x', Number(value)) });
+      });
+
+    guiControllersRef.current.floor.rotationY = floorFolder
+      .add(
+        guiState.floor,
+        'rotationY',
+        towerRotationAxisControls.y.min,
+        towerRotationAxisControls.y.max,
+        towerRotationAxisControls.y.step,
+      )
+      .name(towerRotationAxisControls.y.label)
+      .onChange((value: number) => {
+        updateFloor({ rotationY: clampTowerRotationAxis('y', Number(value)) });
+      });
+
+    guiControllersRef.current.floor.rotationZ = floorFolder
+      .add(
+        guiState.floor,
+        'rotationZ',
+        towerRotationAxisControls.z.min,
+        towerRotationAxisControls.z.max,
+        towerRotationAxisControls.z.step,
+      )
+      .name(towerRotationAxisControls.z.label)
+      .onChange((value: number) => {
+        updateFloor({ rotationZ: clampTowerRotationAxis('z', Number(value)) });
+      });
+
+    guiControllersRef.current.floor.scale = floorFolder
+      .add(
+        guiState.floor,
+        'scale',
+        uniformScaleControl.min,
+        uniformScaleControl.max,
+        uniformScaleControl.step,
+      )
+      .name(uniformScaleControl.label)
+      .onChange((value: number) => {
+        updateFloor({ scale: clampUniformScale(Number(value)) });
+      });
+
+    floorFolder
+      .add(
+        {
+          reset: () => {
+            setFloorTransform(normalizeFloorTransform({ ...castleFloorTransformDefaults }));
+          },
+        },
+        'reset',
+      )
+      .name('Reset Floor');
+
+    guiControllersRef.current.floorLight.enabled = floorLightFolder
+      .add(guiState.floorLight, 'enabled')
+      .name(castleFloorLightEnabledControl.label)
+      .onChange((value: boolean) => {
+        updateFloorLight({ enabled: Boolean(value) });
+      });
 
     guiControllersRef.current.floorLight.color = floorLightFolder
       .addColor(guiState.floorLight, 'color')
@@ -1139,6 +1271,17 @@ export function CastleScene({
         'reset',
       )
       .name('Reset Light');
+
+    skyFolder
+      .add(
+        {
+          reset: () => {
+            setSkyTransform(normalizeSkyTransform({ ...skyTransformDefaults }));
+          },
+        },
+        'reset',
+      )
+      .name('Reset Vortex');
 
     towerTransforms.forEach((_, index) => {
       const towerFolder = gui.addFolder(`Tower ${index + 1}`);
@@ -1253,6 +1396,17 @@ export function CastleScene({
           }),
       };
 
+      towerFolder
+        .add(
+          {
+            reset: () => {
+              updateTower({ ...castleTowerDefaults[index] });
+            },
+          },
+          'reset',
+        )
+        .name('Reset Tower');
+
       towerFolder.close();
     });
 
@@ -1262,7 +1416,7 @@ export function CastleScene({
           reset: () => {
             setCameraPosition({ ...castlePerspectiveCamera.position });
             setCameraTarget({ ...castlePerspectiveCamera.lookAt });
-            setCameraLocked(false);
+            setCameraLocked(true);
           },
         },
         'reset',
@@ -1270,8 +1424,10 @@ export function CastleScene({
       .name('Reset Camera');
 
     cameraFolder.close();
+    lightsFolder.close();
     animationFolder.close();
     castleFolder.close();
+    floorFolder.close();
     floorLightFolder.close();
     skyFolder.close();
 
@@ -1279,7 +1435,7 @@ export function CastleScene({
       gui.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { castle: {}, floorLight: {}, sky: {}, towers: [] };
+      guiControllersRef.current = { castle: {}, floor: {}, floorLight: {}, sky: {}, towers: [] };
     };
     // We only recreate lil-gui when it is toggled.
     // Live values are synced in the effect below.
@@ -1300,7 +1456,9 @@ export function CastleScene({
     guiState.cameraY = cameraPosition.y;
     guiState.cameraZ = cameraPosition.z;
     Object.assign(guiState.castle, normalizeCastleTransform(castleTransform));
+    Object.assign(guiState.floor, normalizeFloorTransform(floorTransform));
     Object.assign(guiState.floorLight, normalizeFloorLightSettings(floorLight));
+    guiState.lightsEnabled = lightsEnabled;
     Object.assign(guiState.sky, normalizeSkyTransform(skyTransform));
     towerTransforms.forEach((tower, index) => {
       const guiTower = guiState.towers[index];
@@ -1325,19 +1483,27 @@ export function CastleScene({
     guiControllersRef.current.castle.x?.updateDisplay();
     guiControllersRef.current.castle.y?.updateDisplay();
     guiControllersRef.current.castle.z?.updateDisplay();
+    guiControllersRef.current.floor.visible?.updateDisplay();
+    guiControllersRef.current.floor.rotationX?.updateDisplay();
+    guiControllersRef.current.floor.rotationY?.updateDisplay();
+    guiControllersRef.current.floor.rotationZ?.updateDisplay();
+    guiControllersRef.current.floor.scale?.updateDisplay();
+    guiControllersRef.current.floor.x?.updateDisplay();
+    guiControllersRef.current.floor.y?.updateDisplay();
+    guiControllersRef.current.floor.z?.updateDisplay();
+    guiControllersRef.current.floorLight.enabled?.updateDisplay();
     guiControllersRef.current.floorLight.color?.updateDisplay();
     guiControllersRef.current.floorLight.x?.updateDisplay();
     guiControllersRef.current.floorLight.y?.updateDisplay();
     guiControllersRef.current.floorLight.z?.updateDisplay();
     guiControllersRef.current.floorLight.intensity?.updateDisplay();
     guiControllersRef.current.floorLight.opacity?.updateDisplay();
-    guiControllersRef.current.sky.x?.updateDisplay();
-    guiControllersRef.current.sky.y?.updateDisplay();
-    guiControllersRef.current.sky.z?.updateDisplay();
+    guiControllersRef.current.lightsEnabled?.updateDisplay();
+    guiControllersRef.current.sky.planeWidth?.updateDisplay();
+    guiControllersRef.current.sky.planeHeight?.updateDisplay();
     guiControllersRef.current.sky.rotationX?.updateDisplay();
     guiControllersRef.current.sky.rotationY?.updateDisplay();
     guiControllersRef.current.sky.rotationZ?.updateDisplay();
-    guiControllersRef.current.sky.scale?.updateDisplay();
 
     guiControllersRef.current.towers.forEach((controllers) => {
       controllers.x?.updateDisplay();
@@ -1349,11 +1515,12 @@ export function CastleScene({
       controllers.scale?.updateDisplay();
       controllers.visible?.updateDisplay();
     });
-  }, [animationActive, cameraLocked, cameraMode, cameraPosition, castleTransform, floorLight, skyTransform, towerTransforms]);
+  }, [animationActive, cameraLocked, cameraMode, cameraPosition, castleTransform, floorLight, floorTransform, lightsEnabled, skyTransform, towerTransforms]);
 
   return (
     <section
       className="castle-scene-shell"
+      ref={shellRef}
       style={{
         background: 'transparent',
       }}
@@ -1375,17 +1542,36 @@ export function CastleScene({
             position={cameraPosition}
             target={cameraTarget}
           />
-          <CastleLighting />
+          {showGui ? (
+            <DebugOrbitControls
+              enabled={cameraLocked}
+              key={cameraMode}
+              onChangeEnd={({ position, target }) => {
+                setCameraPosition({
+                  x: clampCameraAxis('x', position.x),
+                  y: clampCameraAxis('y', position.y),
+                  z: clampCameraAxis('z', position.z),
+                });
+                setCameraTarget(target);
+              }}
+              position={cameraPosition}
+              target={cameraTarget}
+            />
+          ) : null}
+          <CastleLighting enabled={lightsEnabled} />
           <CastleModel
             animationEnabled={animationActive}
             castleTransform={castleTransform}
+            floorTransform={floorTransform}
             floorLight={floorLight}
             floorModelUrl={resolvedFloorModelUrl}
             key={[resolvedCastleModelUrl, resolvedTowerModelUrl, resolvedFloorModelUrl, resolvedSkyTextureUrl].join('::')}
+            lightsEnabled={lightsEnabled}
             modelScale={modelScale}
             modelUrl={resolvedCastleModelUrl}
             onFloorScreenRectChange={setFloorScreenRect}
             pointerTarget={pointerTarget}
+            sceneHeightRatio={sceneHeightRatio}
             skyTextureUrl={resolvedSkyTextureUrl}
             skyTransform={skyTransform}
             towerModelUrl={resolvedTowerModelUrl}
@@ -1427,7 +1613,11 @@ export function CastleScene({
   );
 }
 
-function CastleLighting() {
+function CastleLighting({ enabled }: { enabled: boolean }) {
+  if (!enabled) {
+    return null;
+  }
+
   return (
     <>
       <ambientLight intensity={0.85} />
@@ -1440,12 +1630,15 @@ function CastleLighting() {
 function CastleModel({
   animationEnabled,
   castleTransform,
+  floorTransform,
   floorLight,
   floorModelUrl,
+  lightsEnabled,
   modelScale,
   modelUrl,
   onFloorScreenRectChange,
   pointerTarget,
+  sceneHeightRatio,
   skyTextureUrl,
   skyTransform,
   towerModelUrl,
@@ -1478,6 +1671,40 @@ function CastleModel({
     [floorGltf.scene, preparedCastle.worldScale],
   );
   const preparedSkyTexture = useMemo(() => prepareSkyTexture(skyTexture), [skyTexture]);
+  const skyPlaneSize = useMemo(
+    () => ({
+      height: skyTransform.planeHeight * Math.max(sceneHeightRatio, 1),
+      width: skyTransform.planeWidth,
+    }),
+    [sceneHeightRatio, skyTransform.planeHeight, skyTransform.planeWidth],
+  );
+  const skyTextureTransform = useMemo(() => {
+    const image = preparedSkyTexture.image as { height?: number; width?: number } | undefined;
+    const textureWidth = image?.width ?? 1;
+    const textureHeight = image?.height ?? 1;
+    const textureAspect = textureWidth / Math.max(textureHeight, 1);
+    const planeAspect = skyPlaneSize.width / Math.max(skyPlaneSize.height, 1);
+
+    if (planeAspect > textureAspect) {
+      const repeatY = textureAspect / planeAspect;
+
+      return {
+        offsetX: 0,
+        offsetY: (1 - repeatY) * 0.5,
+        repeatX: 1,
+        repeatY,
+      };
+    }
+
+    const repeatX = planeAspect / textureAspect;
+
+    return {
+      offsetX: (1 - repeatX) * 0.5,
+      offsetY: 0,
+      repeatX,
+      repeatY: 1,
+    };
+  }, [preparedSkyTexture, skyPlaneSize.height, skyPlaneSize.width]);
   const preparedFloorSurface = useMemo(
     () => getFloorSurfaceFootprint(preparedFloor),
     [preparedFloor],
@@ -1510,62 +1737,33 @@ function CastleModel({
       })),
     [layoutPositionScale, towerTransforms],
   );
+  const responsiveFloorTransform = useMemo(
+    () => ({
+      ...floorTransform,
+      ...scaleScenePosition(floorTransform, layoutPositionScale),
+    }),
+    [floorTransform, layoutPositionScale],
+  );
   const attachedTower = responsiveTowerTransforms[0];
   const detachedTowers = responsiveTowerTransforms.slice(1);
-  const compositionBounds = useMemo(() => {
-    const root = new THREE.Group();
-    const castleGroup = new THREE.Group();
+  const floorAnchorBounds = useMemo(() => {
+    const castleRoot = new THREE.Group();
 
-    castleGroup.position.set(
+    castleRoot.position.set(
       responsiveCastleTransform.x,
       responsiveCastleTransform.y,
       responsiveCastleTransform.z,
     );
-    castleGroup.rotation.set(
+    castleRoot.rotation.set(
       THREE.MathUtils.degToRad(responsiveCastleTransform.rotationX),
       THREE.MathUtils.degToRad(responsiveCastleTransform.rotationY),
       THREE.MathUtils.degToRad(responsiveCastleTransform.rotationZ),
     );
-    castleGroup.scale.setScalar(responsiveCastleTransform.scale);
-    castleGroup.add(preparedCastle.root.clone(true));
+    castleRoot.scale.setScalar(responsiveCastleTransform.scale);
+    castleRoot.add(preparedCastle.root.clone(true));
+    castleRoot.updateMatrixWorld(true);
 
-    if (attachedTower) {
-      const attachedTowerGroup = new THREE.Group();
-
-      attachedTowerGroup.position.set(attachedTower.x, attachedTower.y, attachedTower.z);
-      attachedTowerGroup.rotation.set(
-        THREE.MathUtils.degToRad(attachedTower.rotationX),
-        THREE.MathUtils.degToRad(attachedTower.rotationY),
-        THREE.MathUtils.degToRad(attachedTower.rotationZ),
-      );
-      attachedTowerGroup.scale.setScalar(attachedTower.scale);
-      attachedTowerGroup.add(preparedTower.clone(true));
-      castleGroup.add(attachedTowerGroup);
-    }
-
-    root.add(castleGroup);
-
-    detachedTowers.forEach((tower) => {
-      if (!tower.visible) {
-        return;
-      }
-
-      const towerGroup = new THREE.Group();
-
-      towerGroup.position.set(tower.x, tower.y, tower.z);
-      towerGroup.rotation.set(
-        THREE.MathUtils.degToRad(tower.rotationX),
-        THREE.MathUtils.degToRad(tower.rotationY),
-        THREE.MathUtils.degToRad(tower.rotationZ),
-      );
-      towerGroup.scale.setScalar(tower.scale);
-      towerGroup.add(preparedTower.clone(true));
-      root.add(towerGroup);
-    });
-
-    root.updateMatrixWorld(true);
-
-    const bounds = new THREE.Box3().setFromObject(root);
+    const bounds = new THREE.Box3().setFromObject(castleRoot);
     const center = bounds.getCenter(new THREE.Vector3());
     const size = bounds.getSize(new THREE.Vector3());
 
@@ -1574,14 +1772,38 @@ function CastleModel({
       center,
       size,
     };
-  }, [attachedTower, detachedTowers, preparedCastle.root, preparedTower, responsiveCastleTransform]);
+  }, [preparedCastle.root, responsiveCastleTransform]);
   const floorPosition = useMemo(
-    () => new THREE.Vector3(compositionBounds.center.x, compositionBounds.baseY - 0.02, compositionBounds.center.z),
-    [compositionBounds.baseY, compositionBounds.center.x, compositionBounds.center.z],
+    () => new THREE.Vector3(floorAnchorBounds.center.x, floorAnchorBounds.baseY - 0.02, floorAnchorBounds.center.z),
+    [floorAnchorBounds.baseY, floorAnchorBounds.center.x, floorAnchorBounds.center.z],
+  );
+  const finalFloorPosition = useMemo(
+    () =>
+      new THREE.Vector3(
+        floorPosition.x + responsiveFloorTransform.x,
+        floorPosition.y + responsiveFloorTransform.y,
+        floorPosition.z + responsiveFloorTransform.z,
+      ),
+    [floorPosition.x, floorPosition.y, floorPosition.z, responsiveFloorTransform.x, responsiveFloorTransform.y, responsiveFloorTransform.z],
+  );
+  const floorQuaternion = useMemo(
+    () =>
+      new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+          THREE.MathUtils.degToRad(responsiveFloorTransform.rotationX),
+          THREE.MathUtils.degToRad(responsiveFloorTransform.rotationY),
+          THREE.MathUtils.degToRad(responsiveFloorTransform.rotationZ),
+        ),
+      ),
+    [
+      responsiveFloorTransform.rotationX,
+      responsiveFloorTransform.rotationY,
+      responsiveFloorTransform.rotationZ,
+    ],
   );
   const compositionFloorScale = useMemo(() => {
-    const paddedWidth = compositionBounds.size.x * 1.18;
-    const paddedDepth = compositionBounds.size.z * 1.18;
+    const paddedWidth = floorAnchorBounds.size.x * 1.18;
+    const paddedDepth = floorAnchorBounds.size.z * 1.18;
 
     return Math.max(
       paddedWidth / Math.max(preparedFloorSurface.size.x, 0.001),
@@ -1589,8 +1811,8 @@ function CastleModel({
       1,
     );
   }, [
-    compositionBounds.size.x,
-    compositionBounds.size.z,
+    floorAnchorBounds.size.x,
+    floorAnchorBounds.size.z,
     preparedFloorSurface.size.x,
     preparedFloorSurface.size.z,
   ]);
@@ -1673,12 +1895,12 @@ function CastleModel({
     [compositionFloorScreenRect?.width, size.width],
   );
   const floorScale = useMemo(() => {
-
     return {
-      x: compositionFloorScale * Math.max(widthFillMultiplier, 1),
-      z: compositionFloorScale,
+      x: compositionFloorScale * Math.max(widthFillMultiplier, 1) * responsiveFloorTransform.scale,
+      y: responsiveFloorTransform.scale,
+      z: compositionFloorScale * responsiveFloorTransform.scale,
     };
-  }, [compositionFloorScale, widthFillMultiplier]);
+  }, [compositionFloorScale, responsiveFloorTransform.scale, widthFillMultiplier]);
   const floorLightSize = useMemo(() => {
     return {
       depth: Math.max(preparedFloorSurface.size.z * 0.54, 0.8),
@@ -1688,14 +1910,14 @@ function CastleModel({
   const floorMatrix = useMemo(
     () =>
       new THREE.Matrix4().compose(
-        floorPosition.clone(),
-        new THREE.Quaternion(),
-        new THREE.Vector3(floorScale.x, 1, floorScale.z),
+        finalFloorPosition.clone(),
+        floorQuaternion.clone(),
+        new THREE.Vector3(floorScale.x, floorScale.y, floorScale.z),
       ),
-    [floorPosition, floorScale.x, floorScale.z],
+    [finalFloorPosition, floorQuaternion, floorScale.x, floorScale.y, floorScale.z],
   );
   const floorScreenRect = useMemo(() => {
-    if (!size.width || !size.height) {
+    if (!responsiveFloorTransform.visible || !size.width || !size.height) {
       return null;
     }
 
@@ -1714,11 +1936,24 @@ function CastleModel({
     preparedFloorSurface.points,
     size.height,
     size.width,
+    responsiveFloorTransform.visible,
   ]);
 
   useEffect(() => {
     onFloorScreenRectChange(floorScreenRect);
   }, [floorScreenRect, onFloorScreenRectChange]);
+
+  useEffect(() => {
+    preparedSkyTexture.offset.set(skyTextureTransform.offsetX, skyTextureTransform.offsetY);
+    preparedSkyTexture.repeat.set(skyTextureTransform.repeatX, skyTextureTransform.repeatY);
+    preparedSkyTexture.needsUpdate = true;
+
+    return () => {
+      preparedSkyTexture.offset.set(0, 0);
+      preparedSkyTexture.repeat.set(1, 1);
+      preparedSkyTexture.needsUpdate = true;
+    };
+  }, [preparedSkyTexture, skyTextureTransform]);
 
   useEffect(() => {
     if (!groupRef.current) {
@@ -1771,19 +2006,26 @@ function CastleModel({
         ]}
         scale={[skyTransform.scale, skyTransform.scale, skyTransform.scale]}
       >
-        <planeGeometry args={[18, 12]} />
+        <planeGeometry args={[skyPlaneSize.width, skyPlaneSize.height]} />
         <meshBasicMaterial map={preparedSkyTexture} toneMapped={false} />
       </mesh>
       <group
-        position={[floorPosition.x, floorPosition.y, floorPosition.z]}
-        scale={[floorScale.x, 1, floorScale.z]}
+        position={[finalFloorPosition.x, finalFloorPosition.y, finalFloorPosition.z]}
+        rotation={[
+          THREE.MathUtils.degToRad(responsiveFloorTransform.rotationX),
+          THREE.MathUtils.degToRad(responsiveFloorTransform.rotationY),
+          THREE.MathUtils.degToRad(responsiveFloorTransform.rotationZ),
+        ]}
+        scale={[floorScale.x, floorScale.y, floorScale.z]}
       >
-        <primitive object={preparedFloor} />
-        <FloorTopLight
-          depth={floorLightSize.depth}
-          settings={floorLight}
-          width={floorLightSize.width}
-        />
+        {responsiveFloorTransform.visible ? <primitive object={preparedFloor} /> : null}
+        {responsiveFloorTransform.visible && lightsEnabled ? (
+          <FloorTopLight
+            depth={floorLightSize.depth}
+            settings={floorLight}
+            width={floorLightSize.width}
+          />
+        ) : null}
       </group>
       <group
         position={[responsiveCastleTransform.x, responsiveCastleTransform.y, responsiveCastleTransform.z]}

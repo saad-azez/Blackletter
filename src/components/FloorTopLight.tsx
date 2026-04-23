@@ -5,6 +5,7 @@ export const defaultFloorLightColor = '#fff7da';
 
 export interface FloorLightSettings {
   color: string;
+  enabled: boolean;
   intensity: number;
   opacity: number;
   x: number;
@@ -92,7 +93,7 @@ export function FloorTopLight({
     };
   }, [texture]);
 
-  if (settings.opacity <= 0 || settings.intensity <= 0) {
+  if (!settings.enabled || settings.opacity <= 0 || settings.intensity <= 0) {
     return null;
   }
 

@@ -12,6 +12,7 @@ import {
 import * as THREE from 'three';
 
 import charactersBackgroundTextureUrl from '../assets/Textures/characters-background.jpeg';
+import { DebugOrbitControls } from './DebugOrbitControls';
 import {
   backCharacterTransformDefaults,
   buildingTransformDefaults,
@@ -55,6 +56,7 @@ interface GuiState {
   backgroundEnabled: boolean;
   building: CharacterTransform;
   cameraMode: CameraMode;
+  orbitEnabled: boolean;
   cameraX: number;
   cameraY: number;
   cameraZ: number;
@@ -78,6 +80,7 @@ interface GuiControllers {
   backgroundEnabled?: ReturnType<GUI['add']>;
   building: TransformGuiControllers;
   cameraMode?: ReturnType<GUI['add']>;
+  orbitEnabled?: ReturnType<GUI['add']>;
   cameraX?: ReturnType<GUI['add']>;
   cameraY?: ReturnType<GUI['add']>;
   cameraZ?: ReturnType<GUI['add']>;
@@ -99,6 +102,7 @@ interface CharacterStageProps {
 interface CharacterSceneCameraProps {
   animationEnabled: boolean;
   mode: CameraMode;
+  orbitEnabled: boolean;
   pointerTarget: MutableRefObject<THREE.Vector2>;
   position: SceneCameraPosition;
   target: SceneCameraPosition;
@@ -322,6 +326,7 @@ export function CharacterScene({
     z: clampCameraAxis('z', toNumber(cameraZ, characterPerspectiveCamera.position.z)),
   });
   const [cameraMode, setCameraMode] = useState<CameraMode>('Perspective');
+  const [orbitEnabled, setOrbitEnabled] = useState(true);
   const [animationActive, setAnimationActive] = useState(animationEnabled);
   const [backgroundEnabled, setBackgroundEnabled] = useState(true);
   const [characterTransform, setCharacterTransform] = useState<CharacterTransform>(() =>
@@ -334,7 +339,7 @@ export function CharacterScene({
     normalizeCharacterTransform({ ...buildingTransformDefaults }),
   );
   const [preparedSceneSize, setPreparedSceneSize] = useState(() => new THREE.Vector3(1, 1, 1));
-  const cameraTarget = useMemo<SceneCameraPosition>(
+  const defaultCameraTarget = useMemo<SceneCameraPosition>(
     () => ({
       x: characterPerspectiveCamera.lookAt.x,
       y: characterPerspectiveCamera.lookAt.y + Math.max(preparedSceneSize.y * 0.06, 0),
@@ -342,6 +347,9 @@ export function CharacterScene({
     }),
     [preparedSceneSize.y],
   );
+  const [cameraTarget, setCameraTarget] = useState<SceneCameraPosition>(() => ({
+    ...characterPerspectiveCamera.lookAt,
+  }));
 
   useEffect(() => {
     setCameraPosition({
@@ -354,6 +362,10 @@ export function CharacterScene({
   useEffect(() => {
     setAnimationActive(animationEnabled);
   }, [animationEnabled]);
+
+  useEffect(() => {
+    setCameraTarget(defaultCameraTarget);
+  }, [defaultCameraTarget]);
 
   useEffect(() => {
     useGLTF.preload(resolvedCharacterModelUrl, dracoDecoderPath);
@@ -434,6 +446,7 @@ export function CharacterScene({
       backgroundEnabled,
       building: normalizeCharacterTransform({ ...buildingTransform }),
       cameraMode,
+      orbitEnabled,
       cameraX: cameraPosition.x,
       cameraY: cameraPosition.y,
       cameraZ: cameraPosition.z,
@@ -472,6 +485,13 @@ export function CharacterScene({
         if (cameraModes.includes(value as CameraMode)) {
           setCameraMode(value as CameraMode);
         }
+      });
+
+    guiControllersRef.current.orbitEnabled = cameraFolder
+      .add(guiState, 'orbitEnabled')
+      .name('Orbit Controls')
+      .onChange((value: boolean) => {
+        setOrbitEnabled(Boolean(value));
       });
 
     guiControllersRef.current.cameraX = cameraFolder
@@ -528,6 +548,8 @@ export function CharacterScene({
           reset: () => {
             setCameraPosition({ ...characterPerspectiveCamera.position });
             setCameraMode('Perspective');
+            setOrbitEnabled(true);
+            setCameraTarget(defaultCameraTarget);
           },
         },
         'reset',
@@ -966,6 +988,7 @@ export function CharacterScene({
     guiState.backgroundEnabled = backgroundEnabled;
     Object.assign(guiState.building, normalizeCharacterTransform(buildingTransform));
     guiState.cameraMode = cameraMode;
+    guiState.orbitEnabled = orbitEnabled;
     guiState.cameraX = cameraPosition.x;
     guiState.cameraY = cameraPosition.y;
     guiState.cameraZ = cameraPosition.z;
@@ -974,6 +997,7 @@ export function CharacterScene({
     guiControllersRef.current.animationEnabled?.updateDisplay();
     guiControllersRef.current.backgroundEnabled?.updateDisplay();
     guiControllersRef.current.cameraMode?.updateDisplay();
+    guiControllersRef.current.orbitEnabled?.updateDisplay();
     guiControllersRef.current.cameraX?.updateDisplay();
     guiControllersRef.current.cameraY?.updateDisplay();
     guiControllersRef.current.cameraZ?.updateDisplay();
@@ -1009,6 +1033,7 @@ export function CharacterScene({
     cameraMode,
     cameraPosition,
     characterTransform,
+    orbitEnabled,
   ]);
 
   return (
@@ -1035,10 +1060,27 @@ export function CharacterScene({
         <CharacterSceneCamera
           animationEnabled={animationActive}
           mode={cameraMode}
+          orbitEnabled={showGui && orbitEnabled}
           pointerTarget={pointerTarget}
           position={cameraPosition}
           target={cameraTarget}
         />
+        {showGui ? (
+          <DebugOrbitControls
+            enabled={orbitEnabled}
+            key={cameraMode}
+            onChangeEnd={({ position, target }) => {
+              setCameraPosition({
+                x: clampCameraAxis('x', position.x),
+                y: clampCameraAxis('y', position.y),
+                z: clampCameraAxis('z', position.z),
+              });
+              setCameraTarget(target);
+            }}
+            position={cameraPosition}
+            target={cameraTarget}
+          />
+        ) : null}
         <CharacterStage
           characterModelUrl={resolvedBackCharacterModelUrl}
           characterTransform={backCharacterTransform}
@@ -1119,6 +1161,7 @@ function CharacterStage({
 function CharacterSceneCamera({
   animationEnabled,
   mode,
+  orbitEnabled,
   pointerTarget,
   position,
   target,
@@ -1149,7 +1192,7 @@ function CharacterSceneCamera({
   useFrame((_, delta) => {
     const camera = mode === 'Orthographic' ? orthographicCameraRef.current : perspectiveCameraRef.current;
 
-    if (!camera) {
+    if (!camera || orbitEnabled) {
       return;
     }
 
