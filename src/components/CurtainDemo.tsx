@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import PaperCurtainEffect from './BlackletterPaperCurtain.mjs';
 
+const DURATION_S = 2.2;
+const ANIMATION_BUFFER_MS = (DURATION_S + 0.4) * 1000;
+
 const styles = {
   root: {
     background: 'radial-gradient(circle at 50% 30%, #1a0f08 0%, #060607 100%)',
@@ -109,7 +112,7 @@ export function CurtainDemo() {
       color: '#1D1D1B',
       background: '#0a0808',
       style: 'theatre',
-      duration: 2.2,
+      duration: DURATION_S,
       showLoader: true,
       loaderColor: 'rgba(255, 245, 210, 0.55)',
       curlIntensity: 0.14,
@@ -135,25 +138,21 @@ export function CurtainDemo() {
   function handleIn() {
     if (!effectRef.current || running) return;
     setRunning(true);
-    const tween = effectRef.current.in();
-    const done = () => setRunning(false);
-    if (tween?.then) {
-      tween.then(done);
-    } else if (tween) {
-      (tween as any).eventCallback?.('onComplete', done);
-    }
-    setTimeout(done, 3000);
+    effectRef.current.in();
+    setTimeout(() => setRunning(false), ANIMATION_BUFFER_MS);
   }
 
   function handleInWaitForLoad() {
     if (!effectRef.current || running) return;
     setRunning(true);
-    effectRef.current.state.progress = 0;
-    effectRef.current.draw();
-    setLoadVal(0);
-    effectRef.current.setLoadProgress(0);
 
-    // Simulate an async load: fill the bar over ~1.5 s, then reveal.
+    // Reset to closed paper and zero out the bar.
+    effectRef.current.state.progress = 0;
+    effectRef.current.setLoadProgress(0);
+    setLoadVal(0);
+
+    // Fake an async asset load: fill the bar over ~1.5 s.
+    // When it hits 100%, fire in() to trigger the tear.
     let v = 0;
     const id = setInterval(() => {
       v = Math.min(v + 0.04 + Math.random() * 0.04, 1);
@@ -161,18 +160,17 @@ export function CurtainDemo() {
       effectRef.current?.setLoadProgress(v);
       if (v >= 1) {
         clearInterval(id);
-        setTimeout(() => setRunning(false), 2500);
+        effectRef.current?.in();
+        setTimeout(() => setRunning(false), ANIMATION_BUFFER_MS);
       }
     }, 60);
-
-    effectRef.current.in({ waitForLoad: false });
   }
 
   function handleOut() {
     if (!effectRef.current || running) return;
     setRunning(true);
     effectRef.current.out();
-    setTimeout(() => setRunning(false), 3000);
+    setTimeout(() => setRunning(false), ANIMATION_BUFFER_MS);
   }
 
   function handleSetLoad(val: number) {
