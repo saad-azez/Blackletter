@@ -19,7 +19,9 @@ import * as THREE from 'three';
 import battlefieldTextureUrl from '../assets/Textures/low_angle_battlefield_depth_of_field_pillars_cinema.jpeg';
 import { DebugOrbitControls } from './DebugOrbitControls';
 import {
+  chessAmbientIntensityControl,
   chessCameraAxisControls,
+  chessDirectionalIntensityControl,
   chessFloorMeshTransformDefaults,
   chessFloorLightAxisControls,
   chessFloorLightColorControl,
@@ -27,16 +29,23 @@ import {
   chessFloorLightEnabledControl,
   chessFloorLightIntensityControl,
   chessFloorLightOpacityControl,
+  chessLightPositionAxisControls,
   chessLightsControl,
   chessFloorTransformDefaults,
   chessPerspectiveCamera,
   chessPieceDefaults,
+  chessSceneLightDefaults,
+  chessSpotIntensityControl,
   pieceLayoutAxisControls,
   scenePositionAxisControls,
   sceneRotationAxisControls,
   uniformScaleControl,
+  type ChessAmbientLightSettings,
   type ChessFloorMeshTransform,
+  type ChessHemisphereLightSettings,
   type ChessPieceTransform,
+  type ChessPositionedLightSettings,
+  type ChessSceneLightSettings,
   type SceneCameraPosition,
   type SceneTransform,
 } from './ChessScene.config';
@@ -82,6 +91,7 @@ interface GuiState {
   floorLight: FloorLightSettings;
   lightsEnabled: boolean;
   pieces: ChessPieceTransform[];
+  sceneLights: ChessSceneLightSettings;
 }
 
 interface TransformGuiControllers {
@@ -105,6 +115,35 @@ interface FloorLightGuiControllers {
   z?: ReturnType<GUI['add']>;
 }
 
+interface LightColorIntensityGuiControllers {
+  color?: ReturnType<GUI['addColor']>;
+  intensity?: ReturnType<GUI['add']>;
+}
+
+interface PositionedLightGuiControllers extends LightColorIntensityGuiControllers {
+  x?: ReturnType<GUI['add']>;
+  y?: ReturnType<GUI['add']>;
+  z?: ReturnType<GUI['add']>;
+}
+
+interface HemisphereLightGuiControllers {
+  groundColor?: ReturnType<GUI['addColor']>;
+  intensity?: ReturnType<GUI['add']>;
+  skyColor?: ReturnType<GUI['addColor']>;
+  x?: ReturnType<GUI['add']>;
+  y?: ReturnType<GUI['add']>;
+  z?: ReturnType<GUI['add']>;
+}
+
+interface SceneLightsGuiControllers {
+  ambient: LightColorIntensityGuiControllers;
+  backSpot: PositionedLightGuiControllers;
+  hemisphere: HemisphereLightGuiControllers;
+  mainDirectional: PositionedLightGuiControllers;
+  secondaryDirectional: PositionedLightGuiControllers;
+  topSpot: PositionedLightGuiControllers;
+}
+
 interface GuiControllers {
   animationEnabled?: ReturnType<GUI['add']>;
   board: TransformGuiControllers;
@@ -117,6 +156,7 @@ interface GuiControllers {
   floorLight: FloorLightGuiControllers;
   lightsEnabled?: ReturnType<GUI['add']>;
   pieces: TransformGuiControllers[];
+  sceneLights: SceneLightsGuiControllers;
 }
 
 interface ChessBoardSceneProps {
@@ -141,6 +181,7 @@ interface ChessSceneCameraProps {
 interface ChessLightingProps {
   enabled: boolean;
   floorTransform: SceneTransform;
+  sceneLights: ChessSceneLightSettings;
 }
 
 interface PreparedSceneResult {
@@ -488,7 +529,20 @@ export function ChessScene({
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
-  const guiControllersRef = useRef<GuiControllers>({ board: {}, floor: {}, floorLight: {}, pieces: [] });
+  const guiControllersRef = useRef<GuiControllers>({
+    board: {},
+    floor: {},
+    floorLight: {},
+    pieces: [],
+    sceneLights: {
+      ambient: {},
+      backSpot: {},
+      hemisphere: {},
+      mainDirectional: {},
+      secondaryDirectional: {},
+      topSpot: {},
+    },
+  });
   const resolvedFloorModelUrl = toText(floorModelUrl).trim() || defaultFloorModelUrl;
   const resolvedChessModelUrl = toText(chessModelUrl).trim() || defaultChessModelUrl;
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
@@ -497,7 +551,7 @@ export function ChessScene({
     z: clampCameraAxis('z', toNumber(cameraZ, chessPerspectiveCamera.position.z)),
   });
   const [cameraMode, setCameraMode] = useState<CameraMode>('Perspective');
-  const [orbitEnabled, setOrbitEnabled] = useState(true);
+  const [orbitEnabled, setOrbitEnabled] = useState(false);
   const [animationActive, setAnimationActive] = useState(animationEnabled);
   const [lightsEnabled, setLightsEnabled] = useState(true);
   const [floorTransform, setFloorTransform] = useState<SceneTransform>(() =>
@@ -512,6 +566,14 @@ export function ChessScene({
   const [pieceTransforms, setPieceTransforms] = useState<ChessPieceTransform[]>(() =>
     clonePieceTransforms(chessPieceDefaults),
   );
+  const [sceneLights, setSceneLights] = useState<ChessSceneLightSettings>(() => ({
+    ambient: { ...chessSceneLightDefaults.ambient },
+    backSpot: { ...chessSceneLightDefaults.backSpot },
+    hemisphere: { ...chessSceneLightDefaults.hemisphere },
+    mainDirectional: { ...chessSceneLightDefaults.mainDirectional },
+    secondaryDirectional: { ...chessSceneLightDefaults.secondaryDirectional },
+    topSpot: { ...chessSceneLightDefaults.topSpot },
+  }));
   const defaultCameraTarget = useMemo<SceneCameraPosition>(
     () => ({
       x: floorTransform.x,
@@ -607,7 +669,13 @@ export function ChessScene({
       guiRef.current?.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { board: {}, floor: {}, floorLight: {}, pieces: [] };
+      guiControllersRef.current = {
+        board: {},
+        floor: {},
+        floorLight: {},
+        pieces: [],
+        sceneLights: { ambient: {}, backSpot: {}, hemisphere: {}, mainDirectional: {}, secondaryDirectional: {}, topSpot: {} },
+      };
       return undefined;
     }
 
@@ -626,11 +694,25 @@ export function ChessScene({
       floorLight: normalizeFloorLightSettings({ ...floorLight }),
       lightsEnabled,
       pieces: clonePieceTransforms(pieceTransforms),
+      sceneLights: {
+        ambient: { ...sceneLights.ambient },
+        backSpot: { ...sceneLights.backSpot },
+        hemisphere: { ...sceneLights.hemisphere },
+        mainDirectional: { ...sceneLights.mainDirectional },
+        secondaryDirectional: { ...sceneLights.secondaryDirectional },
+        topSpot: { ...sceneLights.topSpot },
+      },
     };
 
     guiRef.current = gui;
     guiStateRef.current = guiState;
-    guiControllersRef.current = { board: {}, floor: {}, floorLight: {}, pieces: [] };
+    guiControllersRef.current = {
+      board: {},
+      floor: {},
+      floorLight: {},
+      pieces: [],
+      sceneLights: { ambient: {}, backSpot: {}, hemisphere: {}, mainDirectional: {}, secondaryDirectional: {}, topSpot: {} },
+    };
 
     const updateBoard = (partial: Partial<SceneTransform>) => {
       setFloorTransform((current) => normalizeFloorTransform({ ...current, ...partial }));
@@ -644,6 +726,30 @@ export function ChessScene({
       setFloorLight((current) => normalizeFloorLightSettings({ ...current, ...partial }));
     };
 
+    const updateAmbient = (partial: Partial<ChessAmbientLightSettings>) => {
+      setSceneLights((current) => ({ ...current, ambient: { ...current.ambient, ...partial } }));
+    };
+
+    const updateHemisphere = (partial: Partial<ChessHemisphereLightSettings>) => {
+      setSceneLights((current) => ({ ...current, hemisphere: { ...current.hemisphere, ...partial } }));
+    };
+
+    const updateMainDirectional = (partial: Partial<ChessPositionedLightSettings>) => {
+      setSceneLights((current) => ({ ...current, mainDirectional: { ...current.mainDirectional, ...partial } }));
+    };
+
+    const updateSecondaryDirectional = (partial: Partial<ChessPositionedLightSettings>) => {
+      setSceneLights((current) => ({ ...current, secondaryDirectional: { ...current.secondaryDirectional, ...partial } }));
+    };
+
+    const updateBackSpot = (partial: Partial<ChessPositionedLightSettings>) => {
+      setSceneLights((current) => ({ ...current, backSpot: { ...current.backSpot, ...partial } }));
+    };
+
+    const updateTopSpot = (partial: Partial<ChessPositionedLightSettings>) => {
+      setSceneLights((current) => ({ ...current, topSpot: { ...current.topSpot, ...partial } }));
+    };
+
     const updatePiece = (index: number, partial: Partial<ChessPieceTransform>) => {
       setPieceTransforms((current) =>
         current.map((piece, pieceIndex) =>
@@ -654,6 +760,7 @@ export function ChessScene({
 
     const cameraFolder = gui.addFolder('Camera');
     const lightsFolder = gui.addFolder('Lights');
+    const sceneLightsFolder = gui.addFolder('Scene Lights');
     const animationFolder = gui.addFolder('Animation');
     const boardFolder = gui.addFolder('Board');
     const floorFolder = gui.addFolder('Floor');
@@ -1053,6 +1160,160 @@ export function ChessScene({
       )
       .name('Reset Light');
 
+    // Ambient
+    const ambientFolder = sceneLightsFolder.addFolder('Ambient');
+    guiControllersRef.current.sceneLights.ambient.color = ambientFolder
+      .addColor(guiState.sceneLights.ambient, 'color')
+      .name('Color')
+      .onChange((value: string) => { updateAmbient({ color: toText(value).trim() || '#fff2de' }); });
+    guiControllersRef.current.sceneLights.ambient.intensity = ambientFolder
+      .add(guiState.sceneLights.ambient, 'intensity', chessAmbientIntensityControl.min, chessAmbientIntensityControl.max, chessAmbientIntensityControl.step)
+      .name(chessAmbientIntensityControl.label)
+      .onChange((value: number) => { updateAmbient({ intensity: Number(value) }); });
+    ambientFolder.close();
+
+    // Hemisphere
+    const hemisphereFolder = sceneLightsFolder.addFolder('Hemisphere');
+    guiControllersRef.current.sceneLights.hemisphere.skyColor = hemisphereFolder
+      .addColor(guiState.sceneLights.hemisphere, 'skyColor')
+      .name('Sky Color')
+      .onChange((value: string) => { updateHemisphere({ skyColor: toText(value).trim() || '#ffffff' }); });
+    guiControllersRef.current.sceneLights.hemisphere.groundColor = hemisphereFolder
+      .addColor(guiState.sceneLights.hemisphere, 'groundColor')
+      .name('Ground Color')
+      .onChange((value: string) => { updateHemisphere({ groundColor: toText(value).trim() || '#4d4034' }); });
+    guiControllersRef.current.sceneLights.hemisphere.intensity = hemisphereFolder
+      .add(guiState.sceneLights.hemisphere, 'intensity', chessAmbientIntensityControl.min, chessAmbientIntensityControl.max, chessAmbientIntensityControl.step)
+      .name(chessAmbientIntensityControl.label)
+      .onChange((value: number) => { updateHemisphere({ intensity: Number(value) }); });
+    guiControllersRef.current.sceneLights.hemisphere.x = hemisphereFolder
+      .add(guiState.sceneLights.hemisphere, 'x', chessLightPositionAxisControls.x.min, chessLightPositionAxisControls.x.max, chessLightPositionAxisControls.x.step)
+      .name(chessLightPositionAxisControls.x.label)
+      .onChange((value: number) => { updateHemisphere({ x: Number(value) }); });
+    guiControllersRef.current.sceneLights.hemisphere.y = hemisphereFolder
+      .add(guiState.sceneLights.hemisphere, 'y', chessLightPositionAxisControls.y.min, chessLightPositionAxisControls.y.max, chessLightPositionAxisControls.y.step)
+      .name(chessLightPositionAxisControls.y.label)
+      .onChange((value: number) => { updateHemisphere({ y: Number(value) }); });
+    guiControllersRef.current.sceneLights.hemisphere.z = hemisphereFolder
+      .add(guiState.sceneLights.hemisphere, 'z', chessLightPositionAxisControls.z.min, chessLightPositionAxisControls.z.max, chessLightPositionAxisControls.z.step)
+      .name(chessLightPositionAxisControls.z.label)
+      .onChange((value: number) => { updateHemisphere({ z: Number(value) }); });
+    hemisphereFolder.close();
+
+    // Main Directional
+    const mainDirFolder = sceneLightsFolder.addFolder('Main Directional');
+    guiControllersRef.current.sceneLights.mainDirectional.color = mainDirFolder
+      .addColor(guiState.sceneLights.mainDirectional, 'color')
+      .name('Color')
+      .onChange((value: string) => { updateMainDirectional({ color: toText(value).trim() || '#fff4dc' }); });
+    guiControllersRef.current.sceneLights.mainDirectional.intensity = mainDirFolder
+      .add(guiState.sceneLights.mainDirectional, 'intensity', chessDirectionalIntensityControl.min, chessDirectionalIntensityControl.max, chessDirectionalIntensityControl.step)
+      .name(chessDirectionalIntensityControl.label)
+      .onChange((value: number) => { updateMainDirectional({ intensity: Number(value) }); });
+    guiControllersRef.current.sceneLights.mainDirectional.x = mainDirFolder
+      .add(guiState.sceneLights.mainDirectional, 'x', chessLightPositionAxisControls.x.min, chessLightPositionAxisControls.x.max, chessLightPositionAxisControls.x.step)
+      .name(chessLightPositionAxisControls.x.label)
+      .onChange((value: number) => { updateMainDirectional({ x: Number(value) }); });
+    guiControllersRef.current.sceneLights.mainDirectional.y = mainDirFolder
+      .add(guiState.sceneLights.mainDirectional, 'y', chessLightPositionAxisControls.y.min, chessLightPositionAxisControls.y.max, chessLightPositionAxisControls.y.step)
+      .name(chessLightPositionAxisControls.y.label)
+      .onChange((value: number) => { updateMainDirectional({ y: Number(value) }); });
+    guiControllersRef.current.sceneLights.mainDirectional.z = mainDirFolder
+      .add(guiState.sceneLights.mainDirectional, 'z', chessLightPositionAxisControls.z.min, chessLightPositionAxisControls.z.max, chessLightPositionAxisControls.z.step)
+      .name(chessLightPositionAxisControls.z.label)
+      .onChange((value: number) => { updateMainDirectional({ z: Number(value) }); });
+    mainDirFolder.close();
+
+    // Secondary Directional
+    const secDirFolder = sceneLightsFolder.addFolder('Secondary Directional');
+    guiControllersRef.current.sceneLights.secondaryDirectional.color = secDirFolder
+      .addColor(guiState.sceneLights.secondaryDirectional, 'color')
+      .name('Color')
+      .onChange((value: string) => { updateSecondaryDirectional({ color: toText(value).trim() || '#dcb992' }); });
+    guiControllersRef.current.sceneLights.secondaryDirectional.intensity = secDirFolder
+      .add(guiState.sceneLights.secondaryDirectional, 'intensity', chessDirectionalIntensityControl.min, chessDirectionalIntensityControl.max, chessDirectionalIntensityControl.step)
+      .name(chessDirectionalIntensityControl.label)
+      .onChange((value: number) => { updateSecondaryDirectional({ intensity: Number(value) }); });
+    guiControllersRef.current.sceneLights.secondaryDirectional.x = secDirFolder
+      .add(guiState.sceneLights.secondaryDirectional, 'x', chessLightPositionAxisControls.x.min, chessLightPositionAxisControls.x.max, chessLightPositionAxisControls.x.step)
+      .name(chessLightPositionAxisControls.x.label)
+      .onChange((value: number) => { updateSecondaryDirectional({ x: Number(value) }); });
+    guiControllersRef.current.sceneLights.secondaryDirectional.y = secDirFolder
+      .add(guiState.sceneLights.secondaryDirectional, 'y', chessLightPositionAxisControls.y.min, chessLightPositionAxisControls.y.max, chessLightPositionAxisControls.y.step)
+      .name(chessLightPositionAxisControls.y.label)
+      .onChange((value: number) => { updateSecondaryDirectional({ y: Number(value) }); });
+    guiControllersRef.current.sceneLights.secondaryDirectional.z = secDirFolder
+      .add(guiState.sceneLights.secondaryDirectional, 'z', chessLightPositionAxisControls.z.min, chessLightPositionAxisControls.z.max, chessLightPositionAxisControls.z.step)
+      .name(chessLightPositionAxisControls.z.label)
+      .onChange((value: number) => { updateSecondaryDirectional({ z: Number(value) }); });
+    secDirFolder.close();
+
+    // Back Spotlight
+    const backSpotFolder = sceneLightsFolder.addFolder('Back Spotlight');
+    guiControllersRef.current.sceneLights.backSpot.color = backSpotFolder
+      .addColor(guiState.sceneLights.backSpot, 'color')
+      .name('Color')
+      .onChange((value: string) => { updateBackSpot({ color: toText(value).trim() || '#f6ddb0' }); });
+    guiControllersRef.current.sceneLights.backSpot.intensity = backSpotFolder
+      .add(guiState.sceneLights.backSpot, 'intensity', chessSpotIntensityControl.min, chessSpotIntensityControl.max, chessSpotIntensityControl.step)
+      .name(chessSpotIntensityControl.label)
+      .onChange((value: number) => { updateBackSpot({ intensity: Number(value) }); });
+    guiControllersRef.current.sceneLights.backSpot.x = backSpotFolder
+      .add(guiState.sceneLights.backSpot, 'x', chessLightPositionAxisControls.x.min, chessLightPositionAxisControls.x.max, chessLightPositionAxisControls.x.step)
+      .name(chessLightPositionAxisControls.x.label)
+      .onChange((value: number) => { updateBackSpot({ x: Number(value) }); });
+    guiControllersRef.current.sceneLights.backSpot.y = backSpotFolder
+      .add(guiState.sceneLights.backSpot, 'y', chessLightPositionAxisControls.y.min, chessLightPositionAxisControls.y.max, chessLightPositionAxisControls.y.step)
+      .name(chessLightPositionAxisControls.y.label)
+      .onChange((value: number) => { updateBackSpot({ y: Number(value) }); });
+    guiControllersRef.current.sceneLights.backSpot.z = backSpotFolder
+      .add(guiState.sceneLights.backSpot, 'z', chessLightPositionAxisControls.z.min, chessLightPositionAxisControls.z.max, chessLightPositionAxisControls.z.step)
+      .name(chessLightPositionAxisControls.z.label)
+      .onChange((value: number) => { updateBackSpot({ z: Number(value) }); });
+    backSpotFolder.close();
+
+    // Top Spotlight
+    const topSpotFolder = sceneLightsFolder.addFolder('Top Spotlight');
+    guiControllersRef.current.sceneLights.topSpot.color = topSpotFolder
+      .addColor(guiState.sceneLights.topSpot, 'color')
+      .name('Color')
+      .onChange((value: string) => { updateTopSpot({ color: toText(value).trim() || '#f6ddb0' }); });
+    guiControllersRef.current.sceneLights.topSpot.intensity = topSpotFolder
+      .add(guiState.sceneLights.topSpot, 'intensity', chessSpotIntensityControl.min, chessSpotIntensityControl.max, chessSpotIntensityControl.step)
+      .name(chessSpotIntensityControl.label)
+      .onChange((value: number) => { updateTopSpot({ intensity: Number(value) }); });
+    guiControllersRef.current.sceneLights.topSpot.x = topSpotFolder
+      .add(guiState.sceneLights.topSpot, 'x', chessLightPositionAxisControls.x.min, chessLightPositionAxisControls.x.max, chessLightPositionAxisControls.x.step)
+      .name(chessLightPositionAxisControls.x.label)
+      .onChange((value: number) => { updateTopSpot({ x: Number(value) }); });
+    guiControllersRef.current.sceneLights.topSpot.y = topSpotFolder
+      .add(guiState.sceneLights.topSpot, 'y', chessLightPositionAxisControls.y.min, chessLightPositionAxisControls.y.max, chessLightPositionAxisControls.y.step)
+      .name(chessLightPositionAxisControls.y.label)
+      .onChange((value: number) => { updateTopSpot({ y: Number(value) }); });
+    guiControllersRef.current.sceneLights.topSpot.z = topSpotFolder
+      .add(guiState.sceneLights.topSpot, 'z', chessLightPositionAxisControls.z.min, chessLightPositionAxisControls.z.max, chessLightPositionAxisControls.z.step)
+      .name(chessLightPositionAxisControls.z.label)
+      .onChange((value: number) => { updateTopSpot({ z: Number(value) }); });
+    topSpotFolder.close();
+
+    sceneLightsFolder
+      .add(
+        {
+          reset: () => {
+            setSceneLights({
+              ambient: { ...chessSceneLightDefaults.ambient },
+              backSpot: { ...chessSceneLightDefaults.backSpot },
+              hemisphere: { ...chessSceneLightDefaults.hemisphere },
+              mainDirectional: { ...chessSceneLightDefaults.mainDirectional },
+              secondaryDirectional: { ...chessSceneLightDefaults.secondaryDirectional },
+              topSpot: { ...chessSceneLightDefaults.topSpot },
+            });
+          },
+        },
+        'reset',
+      )
+      .name('Reset All Lights');
+
     piecesFolder
       .add(
         {
@@ -1165,6 +1426,7 @@ export function ChessScene({
 
     cameraFolder.close();
     lightsFolder.close();
+    sceneLightsFolder.close();
     animationFolder.close();
     boardFolder.close();
     floorFolder.close();
@@ -1175,7 +1437,13 @@ export function ChessScene({
       gui.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
-      guiControllersRef.current = { board: {}, floor: {}, floorLight: {}, pieces: [] };
+      guiControllersRef.current = {
+        board: {},
+        floor: {},
+        floorLight: {},
+        pieces: [],
+        sceneLights: { ambient: {}, backSpot: {}, hemisphere: {}, mainDirectional: {}, secondaryDirectional: {}, topSpot: {} },
+      };
     };
     // We only recreate lil-gui when it is toggled.
     // Live values are synced in the effect below.
@@ -1199,6 +1467,12 @@ export function ChessScene({
     Object.assign(guiState.floor, normalizeFloorMeshTransform(floorMeshTransform));
     Object.assign(guiState.floorLight, normalizeFloorLightSettings(floorLight));
     guiState.lightsEnabled = lightsEnabled;
+    Object.assign(guiState.sceneLights.ambient, sceneLights.ambient);
+    Object.assign(guiState.sceneLights.hemisphere, sceneLights.hemisphere);
+    Object.assign(guiState.sceneLights.mainDirectional, sceneLights.mainDirectional);
+    Object.assign(guiState.sceneLights.secondaryDirectional, sceneLights.secondaryDirectional);
+    Object.assign(guiState.sceneLights.backSpot, sceneLights.backSpot);
+    Object.assign(guiState.sceneLights.topSpot, sceneLights.topSpot);
     pieceTransforms.forEach((piece, index) => {
       const guiPiece = guiState.pieces[index];
 
@@ -1239,6 +1513,35 @@ export function ChessScene({
     guiControllersRef.current.floorLight.intensity?.updateDisplay();
     guiControllersRef.current.floorLight.opacity?.updateDisplay();
 
+    guiControllersRef.current.sceneLights.ambient.color?.updateDisplay();
+    guiControllersRef.current.sceneLights.ambient.intensity?.updateDisplay();
+    guiControllersRef.current.sceneLights.hemisphere.skyColor?.updateDisplay();
+    guiControllersRef.current.sceneLights.hemisphere.groundColor?.updateDisplay();
+    guiControllersRef.current.sceneLights.hemisphere.intensity?.updateDisplay();
+    guiControllersRef.current.sceneLights.hemisphere.x?.updateDisplay();
+    guiControllersRef.current.sceneLights.hemisphere.y?.updateDisplay();
+    guiControllersRef.current.sceneLights.hemisphere.z?.updateDisplay();
+    guiControllersRef.current.sceneLights.mainDirectional.color?.updateDisplay();
+    guiControllersRef.current.sceneLights.mainDirectional.intensity?.updateDisplay();
+    guiControllersRef.current.sceneLights.mainDirectional.x?.updateDisplay();
+    guiControllersRef.current.sceneLights.mainDirectional.y?.updateDisplay();
+    guiControllersRef.current.sceneLights.mainDirectional.z?.updateDisplay();
+    guiControllersRef.current.sceneLights.secondaryDirectional.color?.updateDisplay();
+    guiControllersRef.current.sceneLights.secondaryDirectional.intensity?.updateDisplay();
+    guiControllersRef.current.sceneLights.secondaryDirectional.x?.updateDisplay();
+    guiControllersRef.current.sceneLights.secondaryDirectional.y?.updateDisplay();
+    guiControllersRef.current.sceneLights.secondaryDirectional.z?.updateDisplay();
+    guiControllersRef.current.sceneLights.backSpot.color?.updateDisplay();
+    guiControllersRef.current.sceneLights.backSpot.intensity?.updateDisplay();
+    guiControllersRef.current.sceneLights.backSpot.x?.updateDisplay();
+    guiControllersRef.current.sceneLights.backSpot.y?.updateDisplay();
+    guiControllersRef.current.sceneLights.backSpot.z?.updateDisplay();
+    guiControllersRef.current.sceneLights.topSpot.color?.updateDisplay();
+    guiControllersRef.current.sceneLights.topSpot.intensity?.updateDisplay();
+    guiControllersRef.current.sceneLights.topSpot.x?.updateDisplay();
+    guiControllersRef.current.sceneLights.topSpot.y?.updateDisplay();
+    guiControllersRef.current.sceneLights.topSpot.z?.updateDisplay();
+
     guiControllersRef.current.pieces.forEach((controllers) => {
       controllers.visible?.updateDisplay();
       controllers.x?.updateDisplay();
@@ -1259,11 +1562,12 @@ export function ChessScene({
     lightsEnabled,
     orbitEnabled,
     pieceTransforms,
+    sceneLights,
   ]);
 
   return (
     <section
-      className="scene-viewport"
+      className="chess-scene-viewport"
       ref={sectionRef}
       style={{
         backgroundImage: `radial-gradient(circle at 50% 25%, rgba(255, 246, 230, 0.26), transparent 44%), linear-gradient(180deg, rgba(31, 24, 21, 0.58) 0%, rgba(13, 11, 10, 0.82) 100%), url(${battlefieldTextureUrl})`,
@@ -1301,7 +1605,7 @@ export function ChessScene({
             target={cameraTarget}
           />
         ) : null}
-        <ChessLighting enabled={lightsEnabled} floorTransform={floorTransform} />
+        <ChessLighting enabled={lightsEnabled} floorTransform={floorTransform} sceneLights={sceneLights} />
         <ChessBoardScene
           animationEnabled={animationActive}
           chessModelUrl={resolvedChessModelUrl}
@@ -1331,13 +1635,13 @@ export function ChessScene({
   );
 }
 
-function ChessLighting({ enabled, floorTransform }: ChessLightingProps) {
+function ChessLighting({ enabled, floorTransform, sceneLights }: ChessLightingProps) {
   const backLightRef = useRef<THREE.SpotLight>(null);
   const lightTargetRef = useRef<THREE.Object3D>(null);
-  const beamOrigin: [number, number, number] = [
-    floorTransform.x,
-    floorTransform.y + 4.9,
-    floorTransform.z - 3.2,
+  const backSpotPosition: [number, number, number] = [
+    sceneLights.backSpot.x,
+    sceneLights.backSpot.y,
+    sceneLights.backSpot.z,
   ];
 
   useLayoutEffect(() => {
@@ -1370,26 +1674,33 @@ function ChessLighting({ enabled, floorTransform }: ChessLightingProps) {
         ref={lightTargetRef}
         position={[floorTransform.x, floorTransform.y + 0.2, floorTransform.z + 0.2]}
       />
-      <ambientLight color="#fff2de" intensity={1.3} />
-      <hemisphereLight args={['#ffffff', '#4d4034', 1.1]} position={[0, 5, 0]} />
+      <ambientLight color={sceneLights.ambient.color} intensity={sceneLights.ambient.intensity} />
+      <hemisphereLight
+        args={[sceneLights.hemisphere.skyColor, sceneLights.hemisphere.groundColor, sceneLights.hemisphere.intensity]}
+        position={[sceneLights.hemisphere.x, sceneLights.hemisphere.y, sceneLights.hemisphere.z]}
+      />
       <directionalLight
         castShadow
-        color="#fff4dc"
-        intensity={2.8}
-        position={[6, 8, 5]}
+        color={sceneLights.mainDirectional.color}
+        intensity={sceneLights.mainDirectional.intensity}
+        position={[sceneLights.mainDirectional.x, sceneLights.mainDirectional.y, sceneLights.mainDirectional.z]}
         shadow-mapSize-height={2048}
         shadow-mapSize-width={2048}
       />
-      <directionalLight color="#dcb992" intensity={0.9} position={[-5, 4, -6]} />
+      <directionalLight
+        color={sceneLights.secondaryDirectional.color}
+        intensity={sceneLights.secondaryDirectional.intensity}
+        position={[sceneLights.secondaryDirectional.x, sceneLights.secondaryDirectional.y, sceneLights.secondaryDirectional.z]}
+      />
       <spotLight
         ref={backLightRef}
         angle={0.5}
         castShadow
-        color={sunlightColor}
+        color={sceneLights.backSpot.color}
         distance={18}
-        intensity={64}
+        intensity={sceneLights.backSpot.intensity}
         penumbra={1}
-        position={beamOrigin}
+        position={backSpotPosition}
         shadow-camera-far={28}
         shadow-camera-near={0.5}
         shadow-mapSize-height={2048}
@@ -1397,24 +1708,20 @@ function ChessLighting({ enabled, floorTransform }: ChessLightingProps) {
       />
       <spotLight
         angle={0.45}
-        color={sunlightColor}
-        intensity={60}
+        color={sceneLights.topSpot.color}
+        intensity={sceneLights.topSpot.intensity}
         penumbra={1}
-        position={[0, 10, 2]}
+        position={[sceneLights.topSpot.x, sceneLights.topSpot.y, sceneLights.topSpot.z]}
       />
-      <SunRayBeams floorTransform={floorTransform} />
+      <SunRayBeams backSpotPosition={sceneLights.backSpot} floorTransform={floorTransform} />
     </>
   );
 }
 
-function SunRayBeams({ floorTransform }: { floorTransform: SceneTransform }) {
+function SunRayBeams({ backSpotPosition, floorTransform }: { backSpotPosition: { color: string; x: number; y: number; z: number }; floorTransform: SceneTransform }) {
   const beamTexture = useMemo(() => createSunBeamTexture(), []);
   const beamDescriptors = useMemo(() => {
-    const origin = new THREE.Vector3(
-      floorTransform.x,
-      floorTransform.y + 4.9,
-      floorTransform.z - 3.2,
-    );
+    const origin = new THREE.Vector3(backSpotPosition.x, backSpotPosition.y, backSpotPosition.z);
     const up = new THREE.Vector3(0, 1, 0);
 
     const beams = [
@@ -1457,7 +1764,7 @@ function SunRayBeams({ floorTransform }: { floorTransform: SceneTransform }) {
         width: beam.width,
       };
     });
-  }, [floorTransform.x, floorTransform.y, floorTransform.z]);
+  }, [backSpotPosition.x, backSpotPosition.y, backSpotPosition.z, floorTransform.x, floorTransform.y, floorTransform.z]);
 
   useEffect(() => {
     return () => {
@@ -1477,7 +1784,7 @@ function SunRayBeams({ floorTransform }: { floorTransform: SceneTransform }) {
             <planeGeometry args={[beam.width, beam.length]} />
             <meshBasicMaterial
               blending={THREE.AdditiveBlending}
-              color={sunlightColor}
+              color={backSpotPosition.color}
               depthWrite={false}
               map={beamTexture}
               opacity={beam.opacity}
@@ -1490,7 +1797,7 @@ function SunRayBeams({ floorTransform }: { floorTransform: SceneTransform }) {
             <planeGeometry args={[beam.width * 0.88, beam.length]} />
             <meshBasicMaterial
               blending={THREE.AdditiveBlending}
-              color={sunlightColor}
+              color={backSpotPosition.color}
               depthWrite={false}
               map={beamTexture}
               opacity={beam.opacity * 0.72}

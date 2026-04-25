@@ -94,7 +94,7 @@ export const chessFloorMeshTransformDefaults = {
 
 export const chessFloorLightDefaults = {
   color: defaultFloorLightColor,
-  enabled: true,
+  enabled: false,
   intensity: 1,
   opacity: 0.48,
   x: 0,
@@ -105,7 +105,7 @@ export const chessFloorLightDefaults = {
 export const chessPieceDefaults = [
   {
     rotationX: 0,
-    rotationY: 0,
+    rotationY: -120,
     rotationZ: 0,
     scale: 1,
     visible: true,
@@ -115,7 +115,7 @@ export const chessPieceDefaults = [
   },
   {
     rotationX: 0,
-    rotationY: 0,
+    rotationY: -120,
     rotationZ: 0,
     scale: 1,
     visible: true,
@@ -125,7 +125,7 @@ export const chessPieceDefaults = [
   },
   {
     rotationX: 0,
-    rotationY: 0,
+    rotationY: -120,
     rotationZ: 0,
     scale: 1,
     visible: true,
@@ -135,7 +135,7 @@ export const chessPieceDefaults = [
   },
   {
     rotationX: 0,
-    rotationY: 0,
+    rotationY: -120,
     rotationZ: 0,
     scale: 1,
     visible: true,
@@ -145,7 +145,7 @@ export const chessPieceDefaults = [
   },
   {
     rotationX: 0,
-    rotationY: 0,
+    rotationY: -120,
     rotationZ: 0,
     scale: 1,
     visible: true,
@@ -155,7 +155,7 @@ export const chessPieceDefaults = [
   },
   {
     rotationX: 0,
-    rotationY: 0,
+    rotationY: -120,
     rotationZ: 0,
     scale: 1,
     visible: true,
@@ -165,7 +165,7 @@ export const chessPieceDefaults = [
   },
   {
     rotationX: 0,
-    rotationY: 0,
+    rotationY: -120,
     rotationZ: 0,
     scale: 1,
     visible: true,
@@ -175,7 +175,7 @@ export const chessPieceDefaults = [
   },
   {
     rotationX: 0,
-    rotationY: 0,
+    rotationY: -120,
     rotationZ: 0,
     scale: 1,
     visible: true,
@@ -354,3 +354,73 @@ export const uniformScaleControl = {
   min: number;
   step: number;
 };
+
+export interface ChessAmbientLightSettings {
+  color: string;
+  intensity: number;
+}
+
+export interface ChessHemisphereLightSettings {
+  groundColor: string;
+  intensity: number;
+  skyColor: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface ChessPositionedLightSettings {
+  color: string;
+  intensity: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface ChessSceneLightSettings {
+  ambient: ChessAmbientLightSettings;
+  backSpot: ChessPositionedLightSettings;
+  hemisphere: ChessHemisphereLightSettings;
+  mainDirectional: ChessPositionedLightSettings;
+  secondaryDirectional: ChessPositionedLightSettings;
+  topSpot: ChessPositionedLightSettings;
+}
+
+export const chessSceneLightDefaults: ChessSceneLightSettings = {
+  ambient: { color: '#fff2de', intensity: 1.3 },
+  backSpot: { color: '#f6ddb0', intensity: 64, x: 0, y: 3.5, z: -3.2 },
+  hemisphere: { groundColor: '#4d4034', intensity: 1.1, skyColor: '#ffffff', x: 0, y: 5, z: 0 },
+  mainDirectional: { color: '#fff4dc', intensity: 2.8, x: 6, y: 8, z: 5 },
+  secondaryDirectional: { color: '#dcb992', intensity: 0.9, x: -5, y: 4, z: -6 },
+  topSpot: { color: '#f6ddb0', intensity: 60, x: 0, y: 10, z: 2 },
+};
+
+export const chessLightPositionAxisControls = {
+  x: { label: 'Position X', max: 20, min: -20, step: 0.1 },
+  y: { label: 'Position Y', max: 20, min: -20, step: 0.1 },
+  z: { label: 'Position Z', max: 20, min: -20, step: 0.1 },
+} as const satisfies Record<
+  'x' | 'y' | 'z',
+  { label: string; max: number; min: number; step: number }
+>;
+
+export const chessAmbientIntensityControl = {
+  label: 'Intensity',
+  max: 5,
+  min: 0,
+  step: 0.01,
+} as const satisfies { label: string; max: number; min: number; step: number };
+
+export const chessDirectionalIntensityControl = {
+  label: 'Intensity',
+  max: 15,
+  min: 0,
+  step: 0.01,
+} as const satisfies { label: string; max: number; min: number; step: number };
+
+export const chessSpotIntensityControl = {
+  label: 'Intensity',
+  max: 200,
+  min: 0,
+  step: 0.5,
+} as const satisfies { label: string; max: number; min: number; step: number };

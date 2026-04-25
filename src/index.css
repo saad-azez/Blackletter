@@ -44,13 +44,8 @@ canvas {
 
 .scene-viewport {
   position: relative;
-  max-width: 100vw;
   width: 100%;
-  min-height: 100vh;
-  min-height: 100svh;
-  height: 100vh;
-  height: 100svh;
-  height: 100dvh;
+  height: 200vh;
   overflow: hidden;
 }
 
@@ -123,4 +118,13 @@ canvas {
   height: 100vh;
   height: 100svh;
   height: 100dvh;
+}
+
+.chess-scene-viewport {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  height: 100svh;
+  height: 100dvh;
+  overflow: hidden;
 }

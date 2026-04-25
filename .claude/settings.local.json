@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C d:/blackletter status)",
+      "Bash(git -C d:/blackletter diff --stat)",
+      "Bash(git -C d:/blackletter add src/components/CastleScene.config.ts src/components/CastleScene.tsx src/index.css)",
+      "Bash(git -C d:/blackletter commit -m ' *)"
+    ]
+  }
+}

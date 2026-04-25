@@ -100,12 +100,20 @@ interface CharacterStageProps {
 }
 
 interface CharacterSceneCameraProps {
-  animationEnabled: boolean;
   mode: CameraMode;
-  orbitEnabled: boolean;
-  pointerTarget: MutableRefObject<THREE.Vector2>;
   position: SceneCameraPosition;
   target: SceneCameraPosition;
+}
+
+interface CharacterSceneGroupProps {
+  animationEnabled: boolean;
+  buildingModelUrl: string;
+  buildingTransform: CharacterTransform;
+  characterModelUrl: string;
+  characterTransform: CharacterTransform;
+  modelScale: number;
+  onPreparedSizeChange: (size: THREE.Vector3) => void;
+  pointerTarget: MutableRefObject<THREE.Vector2>;
 }
 
 function toText(value: unknown) {
@@ -326,7 +334,7 @@ export function CharacterScene({
     z: clampCameraAxis('z', toNumber(cameraZ, characterPerspectiveCamera.position.z)),
   });
   const [cameraMode, setCameraMode] = useState<CameraMode>('Perspective');
-  const [orbitEnabled, setOrbitEnabled] = useState(true);
+  const [orbitEnabled, setOrbitEnabled] = useState(false);
   const [animationActive, setAnimationActive] = useState(animationEnabled);
   const [backgroundEnabled, setBackgroundEnabled] = useState(true);
   const [characterTransform, setCharacterTransform] = useState<CharacterTransform>(() =>
@@ -1045,7 +1053,7 @@ export function CharacterScene({
         backgroundImage: backgroundEnabled ? `url(${charactersBackgroundTextureUrl})` : 'none',
         backgroundPosition: 'center center',
         backgroundRepeat: 'no-repeat',
-        backgroundSize: 'contain',
+        backgroundSize: 'cover',
       }}
     >
       <Canvas
@@ -1058,10 +1066,7 @@ export function CharacterScene({
         style={{ position: 'absolute', inset: 0 }}
       >
         <CharacterSceneCamera
-          animationEnabled={animationActive}
           mode={cameraMode}
-          orbitEnabled={showGui && orbitEnabled}
-          pointerTarget={pointerTarget}
           position={cameraPosition}
           target={cameraTarget}
         />
@@ -1086,16 +1091,15 @@ export function CharacterScene({
           characterTransform={backCharacterTransform}
           modelScale={modelScale}
         />
-        <CharacterStage
-          characterModelUrl={resolvedBuildingModelUrl}
-          characterTransform={buildingTransform}
-          modelScale={modelScale}
-        />
-        <CharacterStage
+        <CharacterSceneGroup
+          animationEnabled={animationActive}
+          buildingModelUrl={resolvedBuildingModelUrl}
+          buildingTransform={buildingTransform}
           characterModelUrl={resolvedCharacterModelUrl}
           characterTransform={characterTransform}
           modelScale={modelScale}
           onPreparedSizeChange={setPreparedSceneSize}
+          pointerTarget={pointerTarget}
         />
       </Canvas>
       {showGui ? (
@@ -1158,20 +1162,75 @@ function CharacterStage({
   );
 }
 
-function CharacterSceneCamera({
+function CharacterSceneGroup({
   animationEnabled,
-  mode,
-  orbitEnabled,
+  buildingModelUrl,
+  buildingTransform,
+  characterModelUrl,
+  characterTransform,
+  modelScale,
+  onPreparedSizeChange,
   pointerTarget,
-  position,
-  target,
-}: CharacterSceneCameraProps) {
+}: CharacterSceneGroupProps) {
+  const groupRef = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    if (!groupRef.current) return;
+    groupRef.current.position.set(0, 0, 0);
+    groupRef.current.rotation.set(0, 0, 0);
+  }, []);
+
+  useFrame((_, delta) => {
+    if (!groupRef.current) return;
+
+    if (!animationEnabled) {
+      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, 0, 3.2, delta);
+      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, 0, 3.2, delta);
+      groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, 0, 3, delta);
+      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, 0, 3.4, delta);
+      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, 0, 3.4, delta);
+      groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, 0, 3.2, delta);
+      return;
+    }
+
+    const { x, y } = pointerTarget.current;
+
+    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.12, 3.2, delta);
+    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.06, 3.2, delta);
+    groupRef.current.position.z = THREE.MathUtils.damp(
+      groupRef.current.position.z,
+      -Math.abs(x) * 0.04 - Math.abs(y) * 0.03,
+      3,
+      delta,
+    );
+    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.06, 3.4, delta);
+    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.12, 3.4, delta);
+    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.03, 3.2, delta);
+  });
+
+  return (
+    <group ref={groupRef}>
+      <CharacterStage
+        characterModelUrl={buildingModelUrl}
+        characterTransform={buildingTransform}
+        modelScale={modelScale}
+      />
+      <CharacterStage
+        characterModelUrl={characterModelUrl}
+        characterTransform={characterTransform}
+        modelScale={modelScale}
+        onPreparedSizeChange={onPreparedSizeChange}
+      />
+    </group>
+  );
+}
+
+function CharacterSceneCamera({ mode, position, target }: CharacterSceneCameraProps) {
   const { size } = useThree();
   const orthographicZoom = getOrthographicZoom(position, target, size.height);
   const cameraPosition: [number, number, number] = [position.x, position.y, position.z];
   const orthographicCameraRef = useRef<THREE.OrthographicCamera>(null);
   const perspectiveCameraRef = useRef<THREE.PerspectiveCamera>(null);
-  const driftTargetRef = useRef(new THREE.Vector3(target.x, target.y, target.z));
 
   useLayoutEffect(() => {
     const camera = mode === 'Orthographic' ? orthographicCameraRef.current : perspectiveCameraRef.current;
@@ -1188,26 +1247,6 @@ function CharacterSceneCamera({
       camera.updateProjectionMatrix();
     }
   }, [mode, orthographicZoom, position.x, position.y, position.z, target.x, target.y, target.z]);
-
-  useFrame((_, delta) => {
-    const camera = mode === 'Orthographic' ? orthographicCameraRef.current : perspectiveCameraRef.current;
-
-    if (!camera || orbitEnabled) {
-      return;
-    }
-
-    const driftX = animationEnabled ? pointerTarget.current.x * 0.2 : 0;
-    const driftY = animationEnabled ? pointerTarget.current.y * 0.14 : 0;
-    const driftZ = animationEnabled ? -Math.abs(pointerTarget.current.x) * 0.08 : 0;
-
-    camera.position.x = THREE.MathUtils.damp(camera.position.x, position.x + driftX, 3.2, delta);
-    camera.position.y = THREE.MathUtils.damp(camera.position.y, position.y + driftY, 3.2, delta);
-    camera.position.z = THREE.MathUtils.damp(camera.position.z, position.z + driftZ, 3.2, delta);
-
-    driftTargetRef.current.set(target.x + driftX * 0.28, target.y + driftY * 0.18, target.z);
-    camera.lookAt(driftTargetRef.current);
-    camera.updateMatrixWorld();
-  });
 
   if (mode === 'Orthographic') {
     return (
