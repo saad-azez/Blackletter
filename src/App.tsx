@@ -1,6 +1,7 @@
 import { CastleScene } from './components/CastleScene';
 import { CharacterScene } from './components/CharacterScene';
 import { ChessScene } from './components/ChessScene';
+import { CurtainDemo } from './components/CurtainDemo';
 
 type SceneRoute = 'castle' | 'character' | 'chess';
 
@@ -310,6 +311,11 @@ function SceneCard({
 
 function App() {
   const pathname = typeof window === 'undefined' ? '/' : window.location.pathname;
+
+  if (normalizePathname(pathname) === '/curtain') {
+    return <CurtainDemo />;
+  }
+
   const route = parseRoute(pathname);
 
   if (route.notFound) {
