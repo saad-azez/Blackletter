@@ -31,6 +31,11 @@ const DEFAULT_OPTIONS = {
   loaderColor: 'rgba(255, 255, 255, 0.55)',
   // tear
   curlIntensity: 0.14,
+  // premium passes
+  vignetteIntensity: 0.38,
+  filmGrainOpacity: 0.05,
+  bokehGlow: true,
+  warmTint: 0.6, // 0 = neutral, 1 = strong warm cast in highlights
   debug: false,
   debugLabel: 'BlackletterPaperCurtain',
 };
@@ -118,6 +123,9 @@ export default class PaperCurtainEffect {
     this._loaderStart = null;
     this._pendingReveal = false;
     this._isExiting = false;
+    this._grainCanvases = [];
+    this._grainFrame = 0;
+    this._lastGrainSwap = 0;
     this.enterColors = {
       color: this.options.color,
       background: this.options.background,
@@ -543,44 +551,141 @@ export default class PaperCurtainEffect {
     const ctx = this.ctx;
     const grainOpacity = clamp(Number(this.options.grainOpacity) || 0, 0, 1);
     const fiberOpacity = clamp(Number(this.options.fiberOpacity) || 0, 0, 1);
+    const warmth = clamp(Number(this.options.warmTint) || 0, 0, 1);
+    const minSide = Math.min(width, height);
 
+    // Optional user-supplied texture image
     if (this.pattern) {
       ctx.save();
-      ctx.globalAlpha = 0.24 * progress;
+      ctx.globalAlpha = 0.18 * progress;
       ctx.fillStyle = this.pattern;
       ctx.fillRect(0, 0, width, height);
       ctx.restore();
     }
 
+    // Layer 1 — large soft warm/cool blotches: low-frequency organic variation
+    ctx.save();
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = clamp(grainOpacity * 1.6, 0, 1) * progress;
+    for (let i = 0; i < 14; i += 1) {
+      const cx = noise(i * 7.1, this.seed) * width;
+      const cy = noise(i * 4.3, this.seed + 11) * height;
+      const r = minSide * (0.18 + noise(i * 2.7, this.seed + 19) * 0.24);
+      const bias = noise(i * 9.2, this.seed + 33);
+      const tint = bias > 0.5
+        ? `rgba(${220 - warmth * 10}, ${190 - warmth * 5}, ${160 - warmth * 20}, ${0.32 - bias * 0.12})`
+        : `rgba(${50 + warmth * 18}, ${42 + warmth * 8}, ${36}, ${0.42 - bias * 0.18})`;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grad.addColorStop(0, tint);
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Layer 2 — long thin fibres: varied width, alpha, drift
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 72; i += 1) {
+      const y = noise(i * 5.9, this.seed + 91) * height;
+      const startX = noise(i * 3.7, this.seed + 42) * width * 0.2;
+      const endX = lerp(width * 0.55, width * 1.18, noise(i * 2.1, this.seed + 22));
+      const drift = (noise(i * 8.2, this.seed + 15) - 0.5) * height * 0.06;
+      const w = 0.35 + noise(i * 11.3, this.seed + 7) * 0.65;
+      const a = (0.25 + noise(i * 6.4, this.seed + 51) * 0.5) * fiberOpacity;
+      ctx.lineWidth = w;
+      ctx.strokeStyle = `rgba(${245 - warmth * 8}, ${235 - warmth * 4}, ${215 - warmth * 18}, ${a * progress})`;
+      ctx.beginPath();
+      ctx.moveTo(startX, y);
+      ctx.bezierCurveTo(width * 0.28, y + drift, width * 0.62, y - drift, endX, y + drift * 0.4);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Layer 3 — fine specks: high-frequency embedded particles
     ctx.save();
     ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = grainOpacity * progress;
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
-    for (let i = 0; i < 95; i += 1) {
-      const x = noise(i * 7.1, this.seed) * width;
-      const y = noise(i * 4.3, this.seed + 11) * height;
-      const r = 18 + noise(i * 2.7, this.seed + 19) * 70;
+    ctx.globalAlpha = grainOpacity * 0.55 * progress;
+    for (let i = 0; i < 200; i += 1) {
+      const x = noise(i * 13.7, this.seed + 5) * width;
+      const y = noise(i * 11.2, this.seed + 17) * height;
+      const r = 0.4 + noise(i * 3.1, this.seed + 41) * 1.1;
+      const a = 0.4 + noise(i * 5.5, this.seed + 31) * 0.5;
+      ctx.fillStyle = `rgba(18, 12, 8, ${a})`;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, TAU);
       ctx.fill();
     }
     ctx.restore();
+  }
+
+  // ─── premium passes (vignette, film grain) ────────────────────────────
+
+  drawVignette(width, height, intensity) {
+    const amount = clamp(Number(intensity) || 0, 0, 1);
+    if (amount <= 0.001) return;
+    const ctx = this.ctx;
+    const cx = width / 2;
+    const cy = height / 2;
+    const maxR = Math.hypot(cx, cy);
+    const grad = ctx.createRadialGradient(cx, cy, maxR * 0.42, cx, cy, maxR);
+    grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    grad.addColorStop(0.55, `rgba(0, 0, 0, ${amount * 0.32})`);
+    grad.addColorStop(1, `rgba(0, 0, 0, ${amount})`);
 
     ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.globalAlpha = fiberOpacity * progress;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.42)';
-    ctx.lineWidth = 0.7;
-    for (let i = 0; i < 46; i += 1) {
-      const y = noise(i * 5.9, this.seed + 91) * height;
-      const startX = noise(i * 3.7, this.seed + 42) * width * 0.18;
-      const endX = lerp(width * 0.52, width * 1.12, noise(i * 2.1, this.seed + 22));
-      const drift = (noise(i * 8.2, this.seed + 15) - 0.5) * height * 0.055;
-      ctx.beginPath();
-      ctx.moveTo(startX, y);
-      ctx.bezierCurveTo(width * 0.28, y + drift, width * 0.62, y - drift, endX, y + drift * 0.35);
-      ctx.stroke();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+
+  _buildGrainCanvases() {
+    if (this._grainCanvases.length > 0) return;
+    const SIZE = 256;
+    const FRAMES = 4;
+    for (let f = 0; f < FRAMES; f += 1) {
+      const c = document.createElement('canvas');
+      c.width = SIZE;
+      c.height = SIZE;
+      const cctx = c.getContext('2d');
+      const img = cctx.createImageData(SIZE, SIZE);
+      for (let p = 0; p < img.data.length; p += 4) {
+        const v = (Math.random() * 255) | 0;
+        img.data[p] = v;
+        img.data[p + 1] = v;
+        img.data[p + 2] = v;
+        img.data[p + 3] = 255;
+      }
+      cctx.putImageData(img, 0, 0);
+      this._grainCanvases.push(c);
     }
+  }
+
+  drawFilmGrain(width, height, opacity) {
+    const amount = clamp(Number(opacity) || 0, 0, 1);
+    if (amount <= 0.001) return;
+    this._buildGrainCanvases();
+
+    const now = performance.now();
+    if (now - this._lastGrainSwap > 50) {
+      this._grainFrame = (this._grainFrame + 1) % this._grainCanvases.length;
+      this._lastGrainSwap = now;
+    }
+
+    const grainCanvas = this._grainCanvases[this._grainFrame];
+    const ctx = this.ctx;
+    const pattern = ctx.createPattern(grainCanvas, 'repeat');
+    if (!pattern) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = amount;
+    ctx.fillStyle = pattern;
+    ctx.fillRect(0, 0, width, height);
     ctx.restore();
   }
 
@@ -710,6 +815,7 @@ export default class PaperCurtainEffect {
     ctx.fillRect(-width * 0.25, -height * 0.1, width * 1.5, height * 1.2);
     this.drawDepthWash(width, height, 0.55 + progress * 0.45);
     this.drawPaperTexture(width, height, 0.85 + progress * 0.15);
+    this.drawVignette(width, height, this.options.vignetteIntensity * 0.7);
     this.drawTheatreFolds(width, height, progress, side, sideSign, tension);
   }
 
@@ -901,6 +1007,8 @@ export default class PaperCurtainEffect {
     ctx.fillRect(0, 0, width, height);
     this.drawDepthWash(width, height, 0.9);
     this.drawPaperTexture(width, height, 0.86);
+    this.drawVignette(width, height, this.options.vignetteIntensity);
+    this.drawFilmGrain(width, height, this.options.filmGrainOpacity * alpha);
     ctx.restore();
   }
 
@@ -914,6 +1022,7 @@ export default class PaperCurtainEffect {
     const count = Math.max(20, Math.round(Number(this.options.dustCount) || 110));
     const leftEdge = this.getTheatreSeamPoints(width, height, open, 'left');
     const rightEdge = this.getTheatreSeamPoints(width, height, open, 'right');
+    const useBokeh = this.options.bokehGlow !== false;
 
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
@@ -931,8 +1040,29 @@ export default class PaperCurtainEffect {
       const radius = 0.8 + noise(i * 9.1, this.seed + 28) * 2.8;
       const alpha = dustOpacity * burst * (0.35 + noise(i * 8.4, this.seed + 7) * 0.65);
 
+      // Warm/cool/peach colour variation per particle
+      const hueRoll = noise(i * 12.3, this.seed + 17);
+      const core = hueRoll > 0.66
+        ? 'rgba(255, 232, 196,' // warm peach
+        : hueRoll > 0.33
+          ? 'rgba(255, 248, 224,' // cream
+          : 'rgba(238, 240, 250,'; // cool
+
+      if (useBokeh) {
+        // Soft halo ring
+        const haloR = radius * 5;
+        const halo = ctx.createRadialGradient(x, y, 0, x, y, haloR);
+        halo.addColorStop(0, `${core} ${alpha * 0.55})`);
+        halo.addColorStop(0.4, `${core} ${alpha * 0.16})`);
+        halo.addColorStop(1, `${core} 0)`);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = halo;
+        ctx.fillRect(x - haloR, y - haloR, haloR * 2, haloR * 2);
+      }
+
+      // Bright core
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = 'rgba(255, 248, 228, 0.78)';
+      ctx.fillStyle = `${core} 0.95)`;
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, TAU);
       ctx.fill();
@@ -1201,6 +1331,9 @@ export default class PaperCurtainEffect {
       this.drawTheatreCurlLayer(width, height, revealT, 'right');
       this.drawTheatreSeam(width, height, revealT);
       this.drawTheatreDust(width, height, revealT);
+      // Film grain on the receding halves — fades with the curtain.
+      const grainFade = 1 - smoothstep(0.5, 1, revealT);
+      this.drawFilmGrain(width, height, this.options.filmGrainOpacity * grainFade);
     }
 
     // Subtle screen veil that lifts as the reveal progresses.
@@ -1273,5 +1406,6 @@ export default class PaperCurtainEffect {
     }
 
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this._grainCanvases = [];
   }
 }
