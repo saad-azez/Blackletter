@@ -26,6 +26,8 @@ const DEFAULT_OPTIONS = {
   edgeHighlightOpacity: 0.28,
   grainOpacity: 0.16,
   fiberOpacity: 0.13,
+  debug: false,
+  debugLabel: 'BlackletterPaperCurtain',
 };
 
 const TAU = Math.PI * 2;
@@ -84,6 +86,8 @@ export default class PaperCurtainEffect {
     this.textureImage = null;
     this.animationFrame = 0;
     this.resizeObserver = null;
+    this.debugProgressMarks = new Set();
+    this.debugAnimationId = 0;
     this.enterColors = {
       color: this.options.color,
       background: this.options.background,
@@ -101,6 +105,19 @@ export default class PaperCurtainEffect {
 
     this.loadTexture(this.options.texture);
     this.resize();
+    this.log('created', {
+      style: this.getStyle(),
+      canvas,
+      size: getCanvasSize(this.canvas),
+      colors: {
+        color: this.options.color,
+        background: this.options.background,
+      },
+      options: this.getDebugOptions(),
+      gsap: Boolean(window.gsap),
+    });
+
+    window.__BLACKLETTER_LAST_PAPER_EFFECT__ = this;
 
     if ('ResizeObserver' in window) {
       this.resizeObserver = new ResizeObserver(this.resize);
@@ -110,15 +127,87 @@ export default class PaperCurtainEffect {
     }
   }
 
+  isDebug() {
+    return Boolean(this.options.debug || window.__BLACKLETTER_PAPER_DEBUG__);
+  }
+
+  getDebugOptions() {
+    return {
+      style: this.options.style,
+      duration: this.options.duration,
+      ease: this.options.ease,
+      horizontal: this.options.horizontal,
+      exitUsesEnterColors: this.options.exitUsesEnterColors,
+      manageContainerBackground: this.options.manageContainerBackground,
+      foldCount: this.options.foldCount,
+      foldIntensity: this.options.foldIntensity,
+      seamIntensity: this.options.seamIntensity,
+      fiberCount: this.options.fiberCount,
+      dustCount: this.options.dustCount,
+      dustOpacity: this.options.dustOpacity,
+      shadowOpacity: this.options.shadowOpacity,
+      edgeHighlightOpacity: this.options.edgeHighlightOpacity,
+      grainOpacity: this.options.grainOpacity,
+      fiberOpacity: this.options.fiberOpacity,
+    };
+  }
+
+  log(message, data = {}) {
+    if (!this.isDebug()) return;
+
+    console.log(`[${this.options.debugLabel}] ${message}`, data);
+  }
+
+  resetDebugProgressMarks() {
+    this.debugProgressMarks = new Set();
+  }
+
+  logProgress(progress, width, height) {
+    if (!this.isDebug()) return;
+
+    const marks = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1];
+
+    marks.forEach((mark) => {
+      const reached = mark === 0 ? progress <= 0.001 : progress >= mark;
+      const key = `${this.debugAnimationId}:${mark}`;
+
+      if (!reached || this.debugProgressMarks.has(key)) return;
+
+      this.debugProgressMarks.add(key);
+      this.log(`draw progress ${Math.round(mark * 100)}%`, {
+        actualProgress: Number(progress.toFixed(3)),
+        style: this.getStyle(),
+        theatre: this.isTheatreStyle(),
+        width: Math.round(width),
+        height: Math.round(height),
+        colors: {
+          color: this.options.color,
+          background: this.options.background,
+        },
+      });
+    });
+  }
+
   loadTexture(textureUrl) {
-    if (!textureUrl) return;
+    if (!textureUrl) {
+      this.log('texture skipped', { reason: 'No texture URL provided.' });
+      return;
+    }
 
     const image = new Image();
     image.crossOrigin = 'anonymous';
     image.onload = () => {
       this.textureImage = image;
       this.pattern = this.ctx.createPattern(image, 'repeat');
+      this.log('texture loaded', {
+        textureUrl,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      });
       this.draw();
+    };
+    image.onerror = () => {
+      this.log('texture failed', { textureUrl });
     };
     image.src = textureUrl;
   }
@@ -137,6 +226,13 @@ export default class PaperCurtainEffect {
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.log('resize', {
+      cssWidth: width,
+      cssHeight: height,
+      canvasWidth: this.canvas.width,
+      canvasHeight: this.canvas.height,
+      dpr,
+    });
     this.draw();
   }
 
@@ -158,6 +254,10 @@ export default class PaperCurtainEffect {
   setColors(color, background) {
     if (color) this.options.color = color;
     if (background) this.options.background = background;
+    this.log('setColors', {
+      color: this.options.color,
+      background: this.options.background,
+    });
     this.draw();
   }
 
@@ -168,6 +268,11 @@ export default class PaperCurtainEffect {
     };
     this.prepareContainer();
     this.state.progress = 0;
+    this.log('in() called', {
+      behavior: this.isTheatreStyle() ? 'theatre sheet starts closed and tears open from center' : 'classic paper enters',
+      enterColors: this.enterColors,
+      size: getCanvasSize(this.canvas),
+    });
     this.draw();
     return this.animateTo(1);
   }
@@ -179,6 +284,17 @@ export default class PaperCurtainEffect {
     }
 
     this.prepareContainer();
+    this.log('out() called', {
+      behavior: this.isTheatreStyle()
+        ? 'theatre exit uses the same visual direction: closed sheet tears open to reveal'
+        : 'classic paper exits',
+      exitUsesEnterColors: this.options.exitUsesEnterColors,
+      colors: {
+        color: this.options.color,
+        background: this.options.background,
+      },
+      size: getCanvasSize(this.canvas),
+    });
 
     if (this.isTheatreStyle()) {
       this.state.progress = 0;
@@ -196,6 +312,18 @@ export default class PaperCurtainEffect {
 
   animateTo(targetProgress) {
     const duration = Number(this.options.duration) || DEFAULT_OPTIONS.duration;
+    const startProgress = this.state.progress;
+
+    this.debugAnimationId += 1;
+    this.resetDebugProgressMarks();
+    this.log('animateTo()', {
+      animationId: this.debugAnimationId,
+      from: Number(startProgress.toFixed(3)),
+      to: targetProgress,
+      duration,
+      ease: this.options.ease || DEFAULT_OPTIONS.ease,
+      usingGsap: Boolean(window.gsap),
+    });
 
     if (window.gsap) {
       window.gsap.killTweensOf(this.state);
@@ -205,13 +333,18 @@ export default class PaperCurtainEffect {
         duration,
         ease: this.options.ease || DEFAULT_OPTIONS.ease,
         onUpdate: this.draw,
-        onComplete: this.draw,
+        onComplete: () => {
+          this.draw();
+          this.log('animation complete', {
+            animationId: this.debugAnimationId,
+            progress: Number(this.state.progress.toFixed(3)),
+          });
+        },
       });
     }
 
     cancelAnimationFrame(this.animationFrame);
 
-    const startProgress = this.state.progress;
     const startTime = performance.now();
 
     const tick = (now) => {
@@ -224,6 +357,11 @@ export default class PaperCurtainEffect {
 
       if (time < 1) {
         this.animationFrame = requestAnimationFrame(tick);
+      } else {
+        this.log('animation complete', {
+          animationId: this.debugAnimationId,
+          progress: Number(this.state.progress.toFixed(3)),
+        });
       }
     };
 
@@ -826,6 +964,7 @@ export default class PaperCurtainEffect {
     const ctx = this.ctx;
 
     ctx.clearRect(0, 0, width, height);
+    this.logProgress(progress, width, height);
 
     if (this.isTheatreStyle()) {
       this.drawTheatre(width, height, progress);
