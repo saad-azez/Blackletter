@@ -61,7 +61,6 @@ const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7
 const cameraModes = ['Perspective', 'Orthographic'] as const;
 const defaultFloorModelUrl = new URL('../assets/Floor/Floor.glb', import.meta.url).href;
 const defaultChessModelUrl = new URL('../assets/Chess/chees.glb', import.meta.url).href;
-const sunlightColor = '#f6ddb0';
 
 useGLTF.preload(defaultFloorModelUrl, dracoDecoderPath);
 useGLTF.preload(defaultChessModelUrl, dracoDecoderPath);
