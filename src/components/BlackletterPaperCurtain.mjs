@@ -13,12 +13,21 @@ const DEFAULT_OPTIONS = {
   rippedDelta: 1,
   rippedHeight: 0.07,
   horizontal: false,
+  exitUsesEnterColors: true,
+  shadowOpacity: 0.34,
+  edgeHighlightOpacity: 0.28,
+  grainOpacity: 0.16,
+  fiberOpacity: 0.13,
 };
 
 const TAU = Math.PI * 2;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function lerp(start, end, amount) {
+  return start + (end - start) * amount;
 }
 
 function noise(value, seed) {
@@ -62,6 +71,10 @@ export default class PaperCurtainEffect {
     this.textureImage = null;
     this.animationFrame = 0;
     this.resizeObserver = null;
+    this.enterColors = {
+      color: this.options.color,
+      background: this.options.background,
+    };
 
     this.curtain = {
       uniforms: {
@@ -121,12 +134,21 @@ export default class PaperCurtainEffect {
   }
 
   in() {
+    this.enterColors = {
+      color: this.options.color,
+      background: this.options.background,
+    };
     this.state.progress = 0;
     this.draw();
     return this.animateTo(1);
   }
 
   out() {
+    if (this.options.exitUsesEnterColors !== false) {
+      this.options.color = this.enterColors.color;
+      this.options.background = this.enterColors.background;
+    }
+
     if (this.state.progress <= 0.001) {
       this.state.progress = 1;
       this.draw();
@@ -189,18 +211,31 @@ export default class PaperCurtainEffect {
       length *
       rippedHeight *
       0.8;
+    const tooth =
+      Math.sin(t * TAU * Math.max(0.5, rippedFrequency * 2.8) + this.seed * 0.07) *
+      length *
+      rippedAmplitude *
+      0.22;
+    const notchNoise = noise(t * 115 + index * 0.31, this.seed + rippedDelta + 41);
+    const notch = Math.pow(notchNoise, 8) * length * rippedHeight * 1.45;
 
-    return depth + softWave + tornWave + grain;
+    return depth + softWave + tornWave + grain + tooth - notch;
   }
 
-  tracePaperShape(width, height, progress) {
-    const ctx = this.ctx;
+  getDepth(width, height, progress, offset = 0) {
     const horizontal = Boolean(this.options.horizontal);
     const travelLength = horizontal ? width : height;
-    const crossLength = horizontal ? height : width;
     const roughness = clamp(Number(this.options.amplitude) || 0.25, 0, 1);
     const overscan = travelLength * (0.08 + roughness * 0.08);
-    const depth = progress * (travelLength + overscan * 2) - overscan;
+
+    return progress * (travelLength + overscan * 2) - overscan + offset;
+  }
+
+  tracePaperShape(width, height, progress, offset = 0) {
+    const ctx = this.ctx;
+    const horizontal = Boolean(this.options.horizontal);
+    const crossLength = horizontal ? height : width;
+    const depth = this.getDepth(width, height, progress, offset);
     const steps = Math.max(28, Math.round(crossLength / 28));
 
     ctx.beginPath();
@@ -233,8 +268,59 @@ export default class PaperCurtainEffect {
     ctx.closePath();
   }
 
+  traceLeadingEdge(width, height, progress, offset = 0) {
+    const ctx = this.ctx;
+    const horizontal = Boolean(this.options.horizontal);
+    const crossLength = horizontal ? height : width;
+    const depth = this.getDepth(width, height, progress, offset);
+    const steps = Math.max(28, Math.round(crossLength / 28));
+
+    ctx.beginPath();
+
+    if (horizontal) {
+      for (let i = 0; i <= steps; i += 1) {
+        const y = (i / steps) * height;
+        const x = this.getEdgePoint(i, steps + 1, width, depth);
+
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+
+      return;
+    }
+
+    for (let i = 0; i <= steps; i += 1) {
+      const x = width - (i / steps) * width;
+      const y = this.getEdgePoint(i, steps + 1, height, depth);
+
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  }
+
+  drawPaperShadow(width, height, progress) {
+    const ctx = this.ctx;
+    const horizontal = Boolean(this.options.horizontal);
+    const minSide = Math.min(width, height);
+    const shadowStrength = clamp(Number(this.options.shadowOpacity) || 0, 0, 1) * progress;
+
+    if (shadowStrength <= 0.001) return;
+
+    ctx.save();
+    ctx.shadowColor = `rgba(0, 0, 0, ${shadowStrength})`;
+    ctx.shadowBlur = Math.max(18, minSide * 0.045);
+    ctx.shadowOffsetX = horizontal ? Math.max(10, width * 0.018) : 0;
+    ctx.shadowOffsetY = horizontal ? 0 : Math.max(10, height * 0.018);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+    this.tracePaperShape(width, height, progress);
+    ctx.fill();
+    ctx.restore();
+  }
+
   drawPaperTexture(width, height, progress) {
     const ctx = this.ctx;
+    const grainOpacity = clamp(Number(this.options.grainOpacity) || 0, 0, 1);
+    const fiberOpacity = clamp(Number(this.options.fiberOpacity) || 0, 0, 1);
 
     if (this.pattern) {
       ctx.save();
@@ -246,10 +332,10 @@ export default class PaperCurtainEffect {
 
     ctx.save();
     ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = 0.13 * progress;
+    ctx.globalAlpha = grainOpacity * progress;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
 
-    for (let i = 0; i < 70; i += 1) {
+    for (let i = 0; i < 95; i += 1) {
       const x = noise(i * 7.1, this.seed) * width;
       const y = noise(i * 4.3, this.seed + 11) * height;
       const r = 18 + noise(i * 2.7, this.seed + 19) * 70;
@@ -258,6 +344,72 @@ export default class PaperCurtainEffect {
       ctx.fill();
     }
 
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.globalAlpha = fiberOpacity * progress;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.42)';
+    ctx.lineWidth = 0.7;
+
+    for (let i = 0; i < 46; i += 1) {
+      const y = noise(i * 5.9, this.seed + 91) * height;
+      const startX = noise(i * 3.7, this.seed + 42) * width * 0.18;
+      const endX = lerp(width * 0.52, width * 1.12, noise(i * 2.1, this.seed + 22));
+      const drift = (noise(i * 8.2, this.seed + 15) - 0.5) * height * 0.055;
+
+      ctx.beginPath();
+      ctx.moveTo(startX, y);
+      ctx.bezierCurveTo(width * 0.28, y + drift, width * 0.62, y - drift, endX, y + drift * 0.35);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  drawDepthWash(width, height, progress) {
+    const ctx = this.ctx;
+    const horizontal = Boolean(this.options.horizontal);
+    const gradient = horizontal
+      ? ctx.createLinearGradient(0, 0, width, 0)
+      : ctx.createLinearGradient(0, 0, 0, height);
+
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.16)');
+    gradient.addColorStop(0.42, 'rgba(255, 255, 255, 0.02)');
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.22)');
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.7 * progress;
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+
+  drawLeadingEdge(width, height, progress) {
+    const ctx = this.ctx;
+    const minSide = Math.min(width, height);
+    const edgeAlpha = clamp(Number(this.options.edgeHighlightOpacity) || 0, 0, 1) * progress;
+    const lineWidth = Math.max(1, minSide * 0.0035);
+
+    if (edgeAlpha <= 0.001) return;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = `rgba(0, 0, 0, ${edgeAlpha * 0.82})`;
+    ctx.lineWidth = lineWidth * 1.75;
+    this.traceLeadingEdge(width, height, progress, lineWidth * 2.2);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = `rgba(255, 255, 255, ${edgeAlpha})`;
+    ctx.lineWidth = lineWidth;
+    this.traceLeadingEdge(width, height, progress, -lineWidth * 0.7);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -280,6 +432,8 @@ export default class PaperCurtainEffect {
     ctx.fillRect(0, 0, width, height);
     ctx.restore();
 
+    this.drawPaperShadow(width, height, progress);
+
     ctx.save();
     this.tracePaperShape(width, height, progress);
     ctx.clip();
@@ -292,8 +446,11 @@ export default class PaperCurtainEffect {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
 
+    this.drawDepthWash(width, height, progress);
     this.drawPaperTexture(width, height, progress);
     ctx.restore();
+
+    this.drawLeadingEdge(width, height, progress);
   }
 
   destroy() {
