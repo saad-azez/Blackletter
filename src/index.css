@@ -24,7 +24,6 @@ body {
   margin: 0;
   min-width: 320px;
   background: #05070d;
-  overflow-x: hidden;
 }
 
 #root {
@@ -37,6 +36,7 @@ canvas {
 }
 
 .scene-page {
+  max-width: 100vw;
   width: 100%;
   min-height: 100vh;
   min-height: 100svh;
@@ -44,6 +44,7 @@ canvas {
 
 .scene-viewport {
   position: relative;
+  max-width: 100vw;
   width: 100%;
   min-height: 100vh;
   min-height: 100svh;
@@ -55,6 +56,7 @@ canvas {
 
 .castle-scene-shell {
   position: relative;
+  max-width: 100vw;
   width: 100%;
   min-height: 200vh;
   min-height: 200svh;
@@ -114,6 +116,11 @@ canvas {
 }
 
 .castle-scene-viewport {
-  position: sticky;
-  top: 0;
+  max-width: 100vw;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100svh;
+  height: 100vh;
+  height: 100svh;
+  height: 100dvh;
 }
