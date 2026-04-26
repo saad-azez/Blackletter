@@ -166,8 +166,8 @@ const FRAGMENT_SHADER = /* glsl */ `
     // Soft warm/cool gradient (top warm, bottom cool, very subtle)
     vec3 warm = vec3(1.04, 1.01, 0.96);
     vec3 cool = vec3(0.96, 0.99, 1.03);
-    vec3 cast = mix(cool, warm, uv.y * 0.5 + 0.5);
-    base *= mix(vec3(1.0), cast, 0.18 * uWarmTint);
+    vec3 tint = mix(cool, warm, uv.y * 0.5 + 0.5);
+    base *= mix(vec3(1.0), tint, 0.18 * uWarmTint);
 
     // Vignette (radial darken)
     float r = length(uv - 0.5) * 1.414;
