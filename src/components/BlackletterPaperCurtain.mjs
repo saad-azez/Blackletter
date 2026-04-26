@@ -292,7 +292,7 @@ const FRAGMENT_SHADER = /* glsl */ `
           float tipMask = smoothstep(0.06, 0.0, tipDist)
                          * smoothstep(0.02, 0.18, tearT)
                          * (1.0 - smoothstep(0.92, 1.0, tearT));
-          gl_FragColor.rgb += vec3(1.0, 0.78, 0.42) * tipMask * 0.65;
+          gl_FragColor.rgb += vec3(1.0, 1.0, 1.0) * tipMask * 0.65;
 
           // Tiny anticipation shudder before the tear breaks.
           float anteShake = sin(uTime * 30.0) * 0.0015 * smoothstep(0.4, 1.0, anteT);
