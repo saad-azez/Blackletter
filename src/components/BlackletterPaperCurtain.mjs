@@ -173,6 +173,14 @@ const FRAGMENT_SHADER = /* glsl */ `
     return fract(p.x * p.y);
   }
 
+  // Colorize: extracts luminance from a texture sample and remaps it onto
+  // baseColor. The texture drives the highlight/shadow detail; baseColor
+  // sets the hue and value. luma 0 → 0.55×color, luma 1 → 1.45×color.
+  vec3 colorize(vec3 texSample, vec3 baseColor) {
+    float luma = dot(texSample, vec3(0.299, 0.587, 0.114));
+    return clamp(baseColor * mix(0.55, 1.45, luma), 0.0, 1.0);
+  }
+
   vec4 paperSample(vec2 imageUv) {
     vec4 img = texture2D(uImage, uInverted ? vec2(0.0, 1.0) - imageUv : imageUv);
     if (img.a > 0.0) return img;
@@ -268,6 +276,7 @@ const FRAGMENT_SHADER = /* glsl */ `
       if (!inReveal) {
         // Closed sheet — full paper covering everything.
         vec4 paper = paperSample(vImageUv);
+        paper.rgb = colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb);
         paper.rgb = paperLighting(paper.rgb, vUv);
         gl_FragColor = paper;
 
@@ -314,14 +323,14 @@ const FRAGMENT_SHADER = /* glsl */ `
       } else if (dist > colorLimit) {
         // Outer paper still attached.
         vec4 paper = paperSample(vImageUv);
+        paper.rgb = colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb);
         paper.rgb = paperLighting(paper.rgb, vUv);
         gl_FragColor = paper;
       } else if (dist > rippedLimit) {
-        // The torn paper band — sample the ripped texture.
-        vec4 ripTex = texture2D(uTexture, aspectUv);
-        // Multi-layer warm tint on the torn band so it reads as fibre.
-        ripTex.rgb = mix(ripTex.rgb, ripTex.rgb * vec3(1.12, 1.04, 0.92), uWarmTint);
-        gl_FragColor = ripTex;
+        // Torn paper band — colorize the fibre texture with uColor.
+        vec3 ripTex = texture2D(uTexture, aspectUv).rgb;
+        gl_FragColor.rgb = colorize(ripTex, uColor);
+        gl_FragColor.a   = 1.0;
       }
     } else {
       // ── CLASSIC WIPE (Niccolo Miranda's original behaviour) ─────────
@@ -344,10 +353,13 @@ const FRAGMENT_SHADER = /* glsl */ `
 
       if (axis > colorLimit) {
         vec4 paper = paperSample(vImageUv);
+        paper.rgb = colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb);
         paper.rgb = paperLighting(paper.rgb, vUv);
         gl_FragColor = paper;
       } else if (axis > rippedLimit) {
-        gl_FragColor = texture2D(uTexture, aspectUv);
+        vec3 ripTex = texture2D(uTexture, aspectUv).rgb;
+        gl_FragColor.rgb = colorize(ripTex, uColor);
+        gl_FragColor.a   = 1.0;
       }
     }
 
