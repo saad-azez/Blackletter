@@ -1,107 +1,433 @@
+// Blackletter Paper Curtain — WebGL / GLSL implementation.
+//
+// Award-winning paper-tear effect rendered as a single full-screen
+// fragment shader. Inspired by Niccolo Miranda's PaperCurtain pattern;
+// adapted with: theatre-split (tears from horizontal seam outward),
+// phased animation (anticipation → tear → reveal), in-shader loader bar,
+// setLoadProgress / waitForLoad APIs, and runtime color hot-swapping.
+//
+// API (backwards-compatible with the prior Canvas 2D version):
+//   new PaperCurtainEffect(canvas, options)
+//   .in({ waitForLoad?: boolean })
+//   .out()
+//   .setColors(color, background)
+//   .setLoadProgress(0..1)
+//   .destroy()
+//   .curtain.uniforms.uColor.value.set('#hex')
+//   .curtain.uniforms.uBackground.value.set('#hex')
+
+import { Renderer } from 'https://unpkg.com/ogl@0.0.74/src/core/Renderer.js';
+import { Program } from 'https://unpkg.com/ogl@0.0.74/src/core/Program.js';
+import { Texture } from 'https://unpkg.com/ogl@0.0.74/src/core/Texture.js';
+import { Triangle } from 'https://unpkg.com/ogl@0.0.74/src/extras/Triangle.js';
+import { Mesh } from 'https://unpkg.com/ogl@0.0.74/src/core/Mesh.js';
+import { Color } from 'https://unpkg.com/ogl@0.0.74/src/math/Color.js';
+import { Vec2 } from 'https://unpkg.com/ogl@0.0.74/src/math/Vec2.js';
+
 const DEFAULT_OPTIONS = {
   color: '#1D1D1B',
   background: '#000000',
   backgroundOpacity: 1,
-  ease: 'linear',
-  duration: 2.2,
-  texture: '',
-  amplitude: 0.22,
+  ease: 'power2.inOut',
+  duration: 2.0,
+  texture: 'https://uploads-ssl.webflow.com/5f2429f172d117fcee10e819/6059a3e2b9ae6d2bd508685c_pt-texture-2.jpg',
+  amplitude: 0.25,
   rippedFrequency: 3.5,
   rippedAmplitude: 0.05,
   curveFrequency: 1,
-  curveAmplitude: 0.08,
+  curveAmplitude: 0.6,
   rippedDelta: 1,
-  rippedHeight: 0.065,
+  rippedHeight: 0.07,
   horizontal: false,
   style: 'theatre',
   exitUsesEnterColors: true,
   manageContainerBackground: true,
-  foldCount: 7,
-  foldIntensity: 0.38,
-  seamIntensity: 0.95,
-  fiberCount: 64,
-  dustCount: 110,
-  dustOpacity: 0.25,
-  shadowOpacity: 0.45,
-  edgeHighlightOpacity: 0.32,
-  grainOpacity: 0.14,
-  fiberOpacity: 0.15,
-  // loader
   showLoader: true,
-  loaderColor: 'rgba(255, 255, 255, 0.55)',
-  // tear
-  curlIntensity: 0.14,
-  // premium passes
-  vignetteIntensity: 0.38,
-  filmGrainOpacity: 0.05,
-  bokehGlow: true,
-  warmTint: 0.6, // 0 = neutral, 1 = strong warm cast in highlights
+  loaderColor: '#f5edcc',
+  warmTint: 0.6,
   debug: false,
   debugLabel: 'BlackletterPaperCurtain',
 };
 
-// Phase boundaries within the 0→1 progress for theatre style.
-// 0.00–0.12  anticipation  (paper shudders, seam glows under stress)
-// 0.12–0.40  tear          (crack propagates top-to-bottom)
-// 0.40–1.00  reveal        (halves snap apart with easeOutCubic)
-const ANTE_END = 0.12;
-const TEAR_END = 0.40;
+const VERTEX_SHADER = /* glsl */ `
+  attribute vec2 uv;
+  attribute vec2 position;
+  varying vec2 vUv;
+  varying vec2 vImageUv;
 
-const TAU = Math.PI * 2;
+  uniform vec2 uRatio;
 
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
+  float map(float v, float a, float b, float c, float d) {
+    return c + (v - a) * (d - c) / (b - a);
+  }
 
-function lerp(start, end, amount) {
-  return start + (end - start) * amount;
-}
+  void main() {
+    vUv = uv;
+    vImageUv = vec2(
+      map(uv.x, 0.0, 1.0, 0.5 - uRatio.x / 2.0, 0.5 + uRatio.x / 2.0),
+      map(uv.y, 0.0, 1.0, 0.5 - uRatio.y / 2.0, 0.5 + uRatio.y / 2.0)
+    );
+    gl_Position = vec4(position, 0.0, 1.0);
+  }
+`;
 
-function noise(value, seed) {
-  const x = Math.sin(value * 12.9898 + seed * 78.233) * 43758.5453;
-  return x - Math.floor(x);
-}
+const FRAGMENT_SHADER = /* glsl */ `
+  #define PI 3.1415926538
+  #define NUM_OCTAVES 5
+  #define ANTE_END 0.12
+  #define TEAR_END 0.40
 
-function fallbackEase(t) {
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
+  precision highp float;
 
-function smoothstep(edge0, edge1, value) {
-  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
-  return t * t * (3 - 2 * t);
-}
+  uniform float uHorizontal;
+  uniform float uStyle;          // 0 = classic wipe, 1 = theatre split
+  uniform float uProgress;       // 0..1 over the full animation
+  uniform float uMaxAmplitude;
+  uniform float uRippedNoiseFrequency;
+  uniform float uCurveNoiseFrequency;
+  uniform float uRippedNoiseAmplitude;
+  uniform float uCurveNoiseAmplitude;
+  uniform float uAspect;
+  uniform float uRippedDelta;
+  uniform sampler2D uTexture;    // ripped-band paper texture
+  uniform float uRippedHeight;
+  uniform vec3  uColor;
+  uniform sampler2D uImage;      // optional logo/foreground texture
+  uniform vec3  uBackground;
+  uniform float uBackgroundOpacity;
+  uniform bool  uInverted;
+  uniform float uWarmTint;
 
-function easeOutCubic(t) {
-  return 1 - Math.pow(1 - t, 3);
-}
+  uniform float uShowLoader;
+  uniform float uLoadProgress;
+  uniform vec3  uLoaderColor;
 
-function easeOutExpo(t) {
-  return t >= 1 ? 1 : 1 - Math.pow(2, -10 * t);
-}
+  uniform float uTime;
 
-function roundRect(ctx, x, y, w, h, r) {
-  if (ctx.roundRect) {
-    ctx.roundRect(x, y, w, h, r);
-  } else {
-    ctx.rect(x, y, w, h);
+  varying vec2 vUv;
+  varying vec2 vImageUv;
+
+  // ─── Simplex 2D noise (Ashima) ──────────────────────────────────────────
+  vec3 permute(vec3 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
+  float snoise(vec2 v) {
+    const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+                       -0.577350269189626, 0.024390243902439);
+    vec2 i  = floor(v + dot(v, C.yy));
+    vec2 x0 = v - i + dot(i, C.xx);
+    vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    vec4 x12 = x0.xyxy + C.xxzz;
+    x12.xy -= i1;
+    i = mod(i, 289.0);
+    vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0))
+           + i.x + vec3(0.0, i1.x, 1.0));
+    vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy),
+                             dot(x12.zw, x12.zw)), 0.0);
+    m = m * m; m = m * m;
+    vec3 x = 2.0 * fract(p * C.www) - 1.0;
+    vec3 h = abs(x) - 0.5;
+    vec3 ox = floor(x + 0.5);
+    vec3 a0 = x - ox;
+    m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+    vec3 g;
+    g.x  = a0.x  * x0.x  + h.x  * x0.y;
+    g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+    return 130.0 * dot(m, g);
+  }
+
+  float fbm(vec2 x) {
+    float v = 0.0, a = 0.5;
+    vec2 shift = vec2(100.0);
+    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+    for (int i = 0; i < NUM_OCTAVES; i++) {
+      v += a * snoise(x);
+      x = rot * x * 2.0 + shift;
+      a *= 0.5;
+    }
+    return v;
+  }
+
+  // Hash for cheap film grain
+  float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+  }
+
+  vec4 paperSample(vec2 imageUv) {
+    vec4 img = texture2D(uImage, uInverted ? vec2(0.0, 1.0) - imageUv : imageUv);
+    if (img.a > 0.0) return img;
+    return vec4(uColor, 1.0);
+  }
+
+  // ─── Per-fragment lighting / paper feel ─────────────────────────────────
+  // Adds a subtle vignette, warm-cool gradient, fine grain, and centre-bias
+  // luminosity to break up flat color. Cheap — few extra ALU ops.
+  vec3 paperLighting(vec3 base, vec2 uv) {
+    // Soft warm/cool gradient (top warm, bottom cool, very subtle)
+    vec3 warm = vec3(1.04, 1.01, 0.96);
+    vec3 cool = vec3(0.96, 0.99, 1.03);
+    vec3 cast = mix(cool, warm, uv.y * 0.5 + 0.5);
+    base *= mix(vec3(1.0), cast, 0.18 * uWarmTint);
+
+    // Vignette (radial darken)
+    float r = length(uv - 0.5) * 1.414;
+    float vig = 1.0 - smoothstep(0.55, 1.05, r) * 0.42;
+    base *= vig;
+
+    // Fine static grain
+    float g = hash21(uv * vec2(uAspect * 1200.0, 1200.0));
+    base += (g - 0.5) * 0.04;
+
+    // Animated film grain — subtle drift
+    float fg = hash21(uv * vec2(uAspect * 700.0, 700.0) + vec2(uTime * 17.0, uTime * 23.0));
+    base += (fg - 0.5) * 0.025;
+
+    return base;
+  }
+
+  // Loader bar — thin rounded line near the bottom of the canvas, fades out
+  // during the tear phase. Drawn in UV space so it scales with the canvas.
+  vec4 drawLoader(vec4 baseColor, float tearT) {
+    if (uShowLoader < 0.5 || uProgress >= TEAR_END + 0.05) return baseColor;
+    float fadeOut = 1.0 - smoothstep(0.5, 0.95, tearT);
+
+    float barCY = 0.18;
+    float barHalfW = 0.11;
+    float barHalfH = 0.0018;
+    float xMin = 0.5 - barHalfW;
+    float xMax = 0.5 + barHalfW;
+
+    if (vUv.y > barCY - barHalfH && vUv.y < barCY + barHalfH
+        && vUv.x > xMin && vUv.x < xMax) {
+      float t = (vUv.x - xMin) / (barHalfW * 2.0);
+      // Track
+      vec3 trackCol = mix(baseColor.rgb, vec3(1.0), 0.12);
+      vec3 fillCol  = mix(baseColor.rgb, uLoaderColor, 0.85);
+      vec3 col = t < uLoadProgress ? fillCol : trackCol;
+      // Soft glow at the leading edge
+      float edgeGlow = smoothstep(0.012, 0.0, abs(t - uLoadProgress)) * 0.6;
+      col += uLoaderColor * edgeGlow * fadeOut;
+
+      return mix(baseColor, vec4(col, 1.0), fadeOut);
+    }
+    return baseColor;
+  }
+
+  void main() {
+    vec2 aspectUv = vUv * vec2(uAspect, 1.0);
+
+    // Phase decomposition (theatre style only — classic ignores phases)
+    float anteT   = clamp( uProgress / ANTE_END,                          0.0, 1.0);
+    float tearT   = clamp((uProgress - ANTE_END) / (TEAR_END - ANTE_END), 0.0, 1.0);
+    float rawRev  = clamp((uProgress - TEAR_END) / (1.0 - TEAR_END),       0.0, 1.0);
+    float revealT = 1.0 - pow(1.0 - rawRev, 3.0); // easeOutCubic
+
+    bool theatre  = uStyle > 0.5;
+    bool inReveal = uProgress >= TEAR_END;
+
+    // Background fallback — what shows behind the paper / through the gap.
+    gl_FragColor.rgb = uBackground;
+    gl_FragColor.a   = uBackgroundOpacity;
+
+    if (theatre) {
+      // ── THEATRE SPLIT ───────────────────────────────────────────────
+      // Distance from horizontal seam: 0 at centre, 1 at top/bottom edges.
+      float dist = abs(vUv.y - 0.5) * 2.0;
+      float useT = inReveal ? revealT : 0.0;
+      float amp  = sin(useT * PI);
+
+      // Seam-bias curve so the tear doesn't run perfectly straight.
+      float curve = amp * uMaxAmplitude * sin(vUv.x * PI);
+
+      float rip1   = fbm(aspectUv * uRippedNoiseFrequency)
+                       * uRippedNoiseAmplitude * amp;
+      float crv1   = snoise((aspectUv + vec2(-0.5)) * uCurveNoiseFrequency)
+                       * uCurveNoiseAmplitude * 0.3 * amp;
+      float rip2   = fbm((aspectUv + vec2(uRippedDelta)) * uRippedNoiseFrequency)
+                       * uRippedNoiseAmplitude * amp;
+      float crv2   = snoise((aspectUv + vec2(uRippedDelta)) * uCurveNoiseFrequency)
+                       * uCurveNoiseAmplitude * 0.3 * amp;
+
+      float halfRippedH = uRippedHeight * 0.5 * amp;
+      float colorLimit  = useT - curve + rip1 + crv1 + halfRippedH;
+      float rippedLimit = useT - curve + rip2 + crv2 - halfRippedH;
+
+      if (!inReveal) {
+        // Closed sheet — full paper covering everything.
+        vec4 paper = paperSample(vImageUv);
+        paper.rgb = paperLighting(paper.rgb, vUv);
+        gl_FragColor = paper;
+
+        // Tear-crack rendering during the tear phase: a thin dark line at
+        // x≈0.5 propagating downward from y=1 to y=(1-tearT).
+        if (uProgress >= ANTE_END) {
+          float crackBaseX = 0.5;
+          // Slight noise wobble on the crack so it isn't dead straight.
+          float wobble = snoise(vec2(vUv.y * 14.0, 11.7)) * 0.004;
+          float crackX = crackBaseX + wobble;
+          float crackTop = 1.0 - pow(tearT, 0.6); // ease-in propagation
+          float onCrack = step(crackTop, vUv.y) * step(abs(vUv.x - crackX), 0.0018);
+
+          // Dark crack line.
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.02), onCrack);
+
+          // Hot stress glow at the propagating tip.
+          float tipY = crackTop;
+          float tipDist = length(vec2((vUv.x - crackX) * uAspect, vUv.y - tipY));
+          float tipMask = smoothstep(0.06, 0.0, tipDist)
+                         * smoothstep(0.05, 0.25, tearT)
+                         * (1.0 - smoothstep(0.85, 1.0, tearT));
+          gl_FragColor.rgb += vec3(1.0, 0.78, 0.42) * tipMask * 0.55;
+
+          // Anticipation shudder — subtle horizontal jitter via noise tap.
+          float anteShake = sin(uTime * 30.0) * 0.0015 * smoothstep(0.4, 1.0, anteT);
+          gl_FragColor.rgb *= 1.0 + anteShake;
+        }
+      } else if (dist > colorLimit) {
+        // Outer paper still attached.
+        vec4 paper = paperSample(vImageUv);
+        paper.rgb = paperLighting(paper.rgb, vUv);
+        gl_FragColor = paper;
+      } else if (dist > rippedLimit) {
+        // The torn paper band — sample the ripped texture.
+        vec4 ripTex = texture2D(uTexture, aspectUv);
+        // Multi-layer warm tint on the torn band so it reads as fibre.
+        ripTex.rgb = mix(ripTex.rgb, ripTex.rgb * vec3(1.12, 1.04, 0.92), uWarmTint);
+        gl_FragColor = ripTex;
+      }
+    } else {
+      // ── CLASSIC WIPE (Niccolo Miranda's original behaviour) ─────────
+      float axis = (uHorizontal == 1.0) ? (1.0 - vUv.x) : vUv.y;
+      float amp  = sin(uProgress * PI);
+      float curve = amp * uMaxAmplitude * sin(axis * PI);
+
+      float rip1 = fbm(aspectUv * uRippedNoiseFrequency)
+                     * uRippedNoiseAmplitude * amp;
+      float crv1 = snoise((aspectUv + vec2(-0.5)) * uCurveNoiseFrequency)
+                     * uCurveNoiseAmplitude * amp;
+      float rip2 = fbm((aspectUv + vec2(uRippedDelta)) * uRippedNoiseFrequency)
+                     * uRippedNoiseAmplitude * amp;
+      float crv2 = snoise((aspectUv + vec2(uRippedDelta)) * uCurveNoiseFrequency)
+                     * uCurveNoiseAmplitude * amp;
+
+      float halfRH = uRippedHeight * 0.5 * amp;
+      float colorLimit  = 1.0 - (uProgress + curve - rip1 - crv1 - halfRH);
+      float rippedLimit = 1.0 - (uProgress + curve - rip2 - crv2 + halfRH);
+
+      if (axis > colorLimit) {
+        vec4 paper = paperSample(vImageUv);
+        paper.rgb = paperLighting(paper.rgb, vUv);
+        gl_FragColor = paper;
+      } else if (axis > rippedLimit) {
+        gl_FragColor = texture2D(uTexture, aspectUv);
+      }
+    }
+
+    // Loader bar overlay (closed-sheet phases only).
+    gl_FragColor = drawLoader(gl_FragColor, tearT);
+  }
+`;
+
+// ─── PaperCurtain mesh ────────────────────────────────────────────────────
+
+class PaperCurtain {
+  constructor(gl, opts) {
+    this.gl = gl;
+
+    const geometry = new Triangle(gl);
+
+    this.texture = new Texture(gl, { wrapS: gl.REPEAT, wrapT: gl.REPEAT });
+    if (opts.texture) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => { this.texture.image = img; };
+      img.src = opts.texture;
+    }
+
+    this.uniforms = {
+      uTime:                 { value: 0 },
+      uProgress:             { value: 0 },
+      uMaxAmplitude:         { value: opts.amplitude },
+      uAspect:               { value: 1 },
+      uTexture:              { value: this.texture },
+      uRippedNoiseFrequency: { value: opts.rippedFrequency },
+      uRippedNoiseAmplitude: { value: opts.rippedAmplitude },
+      uCurveNoiseFrequency:  { value: opts.curveFrequency },
+      uCurveNoiseAmplitude:  { value: opts.curveAmplitude },
+      uRippedHeight:         { value: opts.rippedHeight },
+      uRippedDelta:          { value: opts.rippedDelta },
+      uImage:                { value: new Texture(gl) },
+      uRatio:                { value: new Vec2(0, 0) },
+      uColor:                { value: new Color(opts.color) },
+      uBackground:           { value: new Color(opts.background) },
+      uBackgroundOpacity:    { value: opts.backgroundOpacity },
+      uInverted:             { value: false },
+      uHorizontal:           { value: opts.horizontal ? 1 : 0 },
+      uStyle:                { value: opts.style === 'theatre' || opts.style === 'theater' || opts.style === 'split' ? 1 : 0 },
+      uWarmTint:             { value: opts.warmTint },
+      uShowLoader:           { value: opts.showLoader ? 1 : 0 },
+      uLoadProgress:         { value: 0 },
+      uLoaderColor:          { value: new Color(opts.loaderColor) },
+    };
+
+    this.program = new Program(gl, {
+      vertex: VERTEX_SHADER,
+      fragment: FRAGMENT_SHADER,
+      uniforms: this.uniforms,
+      transparent: true,
+    });
+
+    this.mesh = new Mesh(gl, { geometry, program: this.program });
+  }
+
+  setColor(color) {
+    if (color) this.uniforms.uColor.value.set(color);
+  }
+
+  setBackground(color, opacity) {
+    if (color) this.uniforms.uBackground.value.set(color);
+    if (opacity != null) this.uniforms.uBackgroundOpacity.value = opacity;
+  }
+
+  setInverted(value) {
+    this.uniforms.uInverted.value = Boolean(value);
+  }
+
+  setStyle(style) {
+    const s = String(style || '').toLowerCase();
+    this.uniforms.uStyle.value =
+      s === 'theatre' || s === 'theater' || s === 'split' ? 1 : 0;
+  }
+
+  setImage(src) {
+    if (!src) return Promise.resolve();
+    const gl = this.gl;
+    const tex = new Texture(gl, { wrapS: gl.REPEAT, wrapT: gl.REPEAT });
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        tex.image = img;
+        const naturalRatio  = img.naturalWidth / img.naturalHeight;
+        const viewportRatio = window.innerWidth / window.innerHeight;
+        const w = viewportRatio > naturalRatio
+          ? window.innerWidth
+          : window.innerHeight * naturalRatio;
+        const h = w / naturalRatio;
+        this.uniforms.uRatio.value = new Vec2(
+          window.innerWidth / w,
+          window.innerHeight / h,
+        );
+        this.uniforms.uImage.value = tex;
+        resolve();
+      };
+      img.onerror = () => resolve();
+      img.src = src;
+    });
   }
 }
 
-function getCanvasSize(canvas) {
-  const rect = canvas.getBoundingClientRect();
-  const width = rect.width || window.innerWidth || canvas.width || 1;
-  const height = rect.height || window.innerHeight || canvas.height || 1;
-  return { width, height };
-}
-
-function makeUniformSetter(effect, key) {
-  return {
-    set(value) {
-      effect.options[key] = value;
-      effect.draw();
-    },
-  };
-}
+// ─── PaperCurtainEffect — public class ────────────────────────────────────
 
 export default class PaperCurtainEffect {
   constructor(canvas, options = {}) {
@@ -110,1348 +436,274 @@ export default class PaperCurtainEffect {
     }
 
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: true });
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.state = { progress: 0, loadProgress: 0 };
-    this.seed = Math.random() * 1000;
-    this.pattern = null;
-    this.textureImage = null;
-    this.animationFrame = 0;
-    this.resizeObserver = null;
-    this.debugProgressMarks = new Set();
-    this.debugAnimationId = 0;
-    this._loaderStart = null;
+    this.canvasSize = {
+      width: canvas.clientWidth || window.innerWidth,
+      height: canvas.clientHeight || window.innerHeight,
+    };
+
+    this._isExiting   = false;
     this._pendingReveal = false;
-    this._isExiting = false;
-    this._grainCanvases = [];
-    this._grainFrame = 0;
-    this._lastGrainSwap = 0;
+    this._loaderStart = null;
+    this._tween = null;
+    this._destroyed = false;
+    this._startTime = performance.now();
+
     this.enterColors = {
       color: this.options.color,
       background: this.options.background,
     };
 
-    this.curtain = {
-      uniforms: {
-        uColor: { value: makeUniformSetter(this, 'color') },
-        uBackground: { value: makeUniformSetter(this, 'background') },
-      },
-    };
+    this._initGL();
 
-    this.resize = this.resize.bind(this);
-    this.draw = this.draw.bind(this);
+    this.curtain = new PaperCurtain(this.gl, this.options);
 
-    this.loadTexture(this.options.texture);
-    this.resize();
-    this.log('created', {
-      style: this.getStyle(),
-      canvas,
-      size: getCanvasSize(this.canvas),
-      colors: { color: this.options.color, background: this.options.background },
-      options: this.getDebugOptions(),
-      gsap: Boolean(window.gsap),
-    });
+    this._bindEvents();
+    this._resize();
+    this._tickHandler = this._tick.bind(this);
+    this._startTicker();
 
+    if (window.__BLACKLETTER_LAST_PAPER_EFFECT__) {
+      try { window.__BLACKLETTER_LAST_PAPER_EFFECT__.destroy?.(); } catch (e) { /* ignore */ }
+    }
     window.__BLACKLETTER_LAST_PAPER_EFFECT__ = this;
 
+    this._log('created', { options: this.options, gsap: Boolean(window.gsap) });
+  }
+
+  // ─── setup ────────────────────────────────────────────────────────────
+
+  _initGL() {
+    this.renderer = new Renderer({
+      canvas: this.canvas,
+      antialias: true,
+      alpha: true,
+      dpr: Math.min(window.devicePixelRatio || 1, 2),
+    });
+    this.gl = this.renderer.gl;
+  }
+
+  _bindEvents() {
+    this._onResize = (entries) => {
+      const entry = entries && entries[0];
+      if (entry) {
+        this.canvasSize = {
+          width: entry.contentRect.width,
+          height: entry.contentRect.height,
+        };
+      } else {
+        this.canvasSize = {
+          width: this.canvas.clientWidth || window.innerWidth,
+          height: this.canvas.clientHeight || window.innerHeight,
+        };
+      }
+      this._resize();
+    };
+
     if ('ResizeObserver' in window) {
-      this.resizeObserver = new ResizeObserver(this.resize);
-      this.resizeObserver.observe(this.canvas);
+      this._resizeObserver = new ResizeObserver(this._onResize);
+      this._resizeObserver.observe(this.canvas);
     } else {
-      window.addEventListener('resize', this.resize);
+      this._onWindowResize = () => this._onResize();
+      window.addEventListener('resize', this._onWindowResize);
     }
   }
 
-  // ─── debug ───────────────────────────────────────────────────────────────
-
-  isDebug() {
-    return Boolean(this.options.debug || window.__BLACKLETTER_PAPER_DEBUG__);
+  _resize() {
+    const { width, height } = this.canvasSize;
+    if (!width || !height) return;
+    this.renderer.setSize(width, height);
+    this.curtain.uniforms.uAspect.value = width / height;
   }
 
-  getDebugOptions() {
-    return {
-      style: this.options.style,
-      duration: this.options.duration,
-      ease: this.options.ease,
-      horizontal: this.options.horizontal,
-      exitUsesEnterColors: this.options.exitUsesEnterColors,
-      manageContainerBackground: this.options.manageContainerBackground,
-      foldCount: this.options.foldCount,
-      foldIntensity: this.options.foldIntensity,
-      seamIntensity: this.options.seamIntensity,
-      fiberCount: this.options.fiberCount,
-      dustCount: this.options.dustCount,
-      dustOpacity: this.options.dustOpacity,
-      shadowOpacity: this.options.shadowOpacity,
-      edgeHighlightOpacity: this.options.edgeHighlightOpacity,
-      grainOpacity: this.options.grainOpacity,
-      fiberOpacity: this.options.fiberOpacity,
-      showLoader: this.options.showLoader,
-      curlIntensity: this.options.curlIntensity,
-    };
-  }
-
-  log(message, data = {}) {
-    if (!this.isDebug()) return;
-    console.log(`[${this.options.debugLabel}] ${message}`, data);
-  }
-
-  resetDebugProgressMarks() {
-    this.debugProgressMarks = new Set();
-  }
-
-  logProgress(progress, width, height) {
-    if (!this.isDebug()) return;
-    const marks = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1];
-    marks.forEach((mark) => {
-      const reached = mark === 0 ? progress <= 0.001 : progress >= mark;
-      const key = `${this.debugAnimationId}:${mark}`;
-      if (!reached || this.debugProgressMarks.has(key)) return;
-      this.debugProgressMarks.add(key);
-      this.log(`draw progress ${Math.round(mark * 100)}%`, {
-        actualProgress: Number(progress.toFixed(3)),
-        style: this.getStyle(),
-        theatre: this.isTheatreStyle(),
-        width: Math.round(width),
-        height: Math.round(height),
-        colors: { color: this.options.color, background: this.options.background },
-      });
-    });
-  }
-
-  // ─── setup ───────────────────────────────────────────────────────────────
-
-  loadTexture(textureUrl) {
-    if (!textureUrl) {
-      this.log('texture skipped', { reason: 'No texture URL provided.' });
-      return;
+  _startTicker() {
+    if (window.gsap && window.gsap.ticker) {
+      window.gsap.ticker.add(this._tickHandler);
+    } else {
+      const loop = () => {
+        if (this._destroyed) return;
+        this._tickHandler(performance.now());
+        this._raf = requestAnimationFrame(loop);
+      };
+      this._raf = requestAnimationFrame(loop);
     }
-    const image = new Image();
-    image.crossOrigin = 'anonymous';
-    image.onload = () => {
-      this.textureImage = image;
-      this.pattern = this.ctx.createPattern(image, 'repeat');
-      this.log('texture loaded', { textureUrl, width: image.naturalWidth, height: image.naturalHeight });
-      this.draw();
-    };
-    image.onerror = () => { this.log('texture failed', { textureUrl }); };
-    image.src = textureUrl;
   }
 
-  resize() {
-    const { width, height } = getCanvasSize(this.canvas);
-    const dpr = clamp(window.devicePixelRatio || 1, 1, 2);
-    const targetWidth = Math.max(1, Math.round(width * dpr));
-    const targetHeight = Math.max(1, Math.round(height * dpr));
-
-    if (this.canvas.width !== targetWidth || this.canvas.height !== targetHeight) {
-      this.canvas.width = targetWidth;
-      this.canvas.height = targetHeight;
-    }
-
-    this.canvas.style.width = `${width}px`;
-    this.canvas.style.height = `${height}px`;
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.log('resize', {
-      cssWidth: width,
-      cssHeight: height,
-      canvasWidth: this.canvas.width,
-      canvasHeight: this.canvas.height,
-      dpr,
-    });
-    this.draw();
+  _tick() {
+    if (this._destroyed) return;
+    const now = performance.now();
+    this.curtain.uniforms.uTime.value = (now - this._startTime) * 0.001;
+    this.curtain.uniforms.uProgress.value = this.state.progress;
+    this.curtain.uniforms.uLoadProgress.value = this.state.loadProgress;
+    this.renderer.render({ scene: this.curtain.mesh });
   }
 
-  getStyle() {
-    return String(this.options.style || '').toLowerCase();
-  }
-
-  isTheatreStyle() {
-    const style = this.getStyle();
-    return style === 'theatre' || style === 'theater' || style === 'split';
-  }
-
-  prepareContainer() {
-    if (!this.options.manageContainerBackground || !this.canvas.parentElement) return;
-    this.canvas.parentElement.style.background = 'transparent';
-  }
-
-  // ─── public API ──────────────────────────────────────────────────────────
+  // ─── public API ───────────────────────────────────────────────────────
 
   setColors(color, background) {
-    if (color) this.options.color = color;
-    if (background) this.options.background = background;
-    this.log('setColors', { color: this.options.color, background: this.options.background });
-    this.draw();
+    if (color) {
+      this.options.color = color;
+      this.curtain.setColor(color);
+    }
+    if (background) {
+      this.options.background = background;
+      this.curtain.setBackground(background, this.options.backgroundOpacity);
+    }
+    this._log('setColors', { color, background });
   }
 
-  /**
-   * Update the loader bar progress (0–1).
-   * When using in({ waitForLoad: true }), calling setLoadProgress(1) triggers
-   * the reveal automatically after the minimum display time.
-   */
   setLoadProgress(value) {
-    this.state.loadProgress = clamp(Number(value) || 0, 0, 1);
-    this.draw();
-    if (this.state.loadProgress >= 1 && this._pendingReveal) {
+    const v = Math.max(0, Math.min(1, Number(value) || 0));
+    this.state.loadProgress = v;
+    if (v >= 1 && this._pendingReveal) {
       this._pendingReveal = false;
       this._startReveal();
     }
   }
 
-  /**
-   * Show the paper curtain and begin the reveal.
-   *
-   * @param {object} [options]
-   * @param {boolean} [options.waitForLoad=false]
-   *   When true, the curtain shows (with loader bar) and waits for the window
-   *   load event before starting the tear animation. Combine with
-   *   setLoadProgress() to drive the bar from your own asset loader.
-   */
   in(options = {}) {
     const waitForLoad = typeof options === 'object' && Boolean(options.waitForLoad);
 
     this._isExiting = false;
-    this.enterColors = { color: this.options.color, background: this.options.background };
-    this.prepareContainer();
+    this.enterColors = {
+      color: this.options.color,
+      background: this.options.background,
+    };
+    this._prepareContainer();
     this.state.progress = 0;
     this._loaderStart = performance.now();
-    this.log('in() called', {
-      waitForLoad,
-      behavior: this.isTheatreStyle() ? 'theatre: anticipation → tear → reveal' : 'classic paper enters',
-      enterColors: this.enterColors,
-      size: getCanvasSize(this.canvas),
-    });
-    this.draw();
+    this._log('in()', { waitForLoad });
 
     if (waitForLoad) {
       this._pendingReveal = true;
-      const onLoad = () => {
-        if (this._pendingReveal) {
-          this._pendingReveal = false;
-          this._startReveal();
-        }
+      const onReady = () => {
+        if (!this._pendingReveal) return;
+        this._pendingReveal = false;
+        this._startReveal();
       };
       if (document.readyState === 'complete') {
-        onLoad();
+        onReady();
       } else {
-        window.addEventListener('load', onLoad, { once: true });
+        window.addEventListener('load', onReady, { once: true });
       }
       return null;
     }
 
-    return this.animateTo(1);
+    return this._tweenProgress(1);
   }
 
   out() {
     if (this.options.exitUsesEnterColors !== false) {
       this.options.color = this.enterColors.color;
       this.options.background = this.enterColors.background;
+      this.curtain.setColor(this.options.color);
+      this.curtain.setBackground(this.options.background, this.options.backgroundOpacity);
     }
 
-    this.prepareContainer();
-    this.log('out() called', {
-      behavior: this.isTheatreStyle() ? 'theatre exit: tear sequence' : 'classic paper exits',
-      exitUsesEnterColors: this.options.exitUsesEnterColors,
-      colors: { color: this.options.color, background: this.options.background },
-      size: getCanvasSize(this.canvas),
-    });
+    this._prepareContainer();
+    this._isExiting = true;
+    this._log('out()');
 
-    if (this.isTheatreStyle()) {
-      this._isExiting = true;
+    if (this._isTheatre()) {
       this.state.progress = 0;
-      this.draw();
-      return this.animateTo(1);
+      return this._tweenProgress(1);
     }
 
-    if (this.state.progress <= 0.001) {
-      this.state.progress = 1;
-      this.draw();
-    }
-
-    return this.animateTo(0);
+    if (this.state.progress <= 0.001) this.state.progress = 1;
+    return this._tweenProgress(0);
   }
 
-  // ─── animation ───────────────────────────────────────────────────────────
+  destroy() {
+    this._destroyed = true;
+    if (this._tween) {
+      try { this._tween.kill(); } catch (e) { /* ignore */ }
+      this._tween = null;
+    }
+    if (window.gsap && window.gsap.ticker) {
+      window.gsap.ticker.remove(this._tickHandler);
+    }
+    if (this._raf) cancelAnimationFrame(this._raf);
+    if (this._resizeObserver) this._resizeObserver.disconnect();
+    if (this._onWindowResize) window.removeEventListener('resize', this._onWindowResize);
+    // OGL doesn't expose a destroy on Renderer; loose the GL ref.
+    this.gl = null;
+    this.renderer = null;
+    if (window.__BLACKLETTER_LAST_PAPER_EFFECT__ === this) {
+      window.__BLACKLETTER_LAST_PAPER_EFFECT__ = null;
+    }
+  }
+
+  // For backwards-compat with the prior Canvas 2D API. WebGL renders every
+  // frame via the ticker, so an explicit draw() call is a no-op.
+  draw() { /* no-op */ }
+
+  // ─── internals ────────────────────────────────────────────────────────
+
+  _isTheatre() {
+    const s = String(this.options.style || '').toLowerCase();
+    return s === 'theatre' || s === 'theater' || s === 'split';
+  }
+
+  _prepareContainer() {
+    if (!this.options.manageContainerBackground || !this.canvas.parentElement) return;
+    this.canvas.parentElement.style.background = 'transparent';
+  }
 
   _startReveal() {
-    const MIN_DISPLAY_S = 0.5;
+    const MIN_DISPLAY = 0.5;
     const elapsed = this._loaderStart != null
       ? (performance.now() - this._loaderStart) / 1000
-      : MIN_DISPLAY_S;
-    const delay = Math.max(0, MIN_DISPLAY_S - elapsed);
-
-    if (delay > 0) {
-      setTimeout(() => this.animateTo(1), delay * 1000);
-    } else {
-      this.animateTo(1);
-    }
+      : MIN_DISPLAY;
+    const delay = Math.max(0, MIN_DISPLAY - elapsed);
+    if (delay > 0) setTimeout(() => this._tweenProgress(1), delay * 1000);
+    else this._tweenProgress(1);
   }
 
-  animateTo(targetProgress) {
+  _tweenProgress(target) {
     const duration = Number(this.options.duration) || DEFAULT_OPTIONS.duration;
-    const startProgress = this.state.progress;
-
-    this.debugAnimationId += 1;
-    this.resetDebugProgressMarks();
-    this.log('animateTo()', {
-      animationId: this.debugAnimationId,
-      from: Number(startProgress.toFixed(3)),
-      to: targetProgress,
-      duration,
-      usingGsap: Boolean(window.gsap),
-    });
+    const ease = this.options.ease || DEFAULT_OPTIONS.ease;
 
     if (window.gsap) {
-      window.gsap.killTweensOf(this.state);
-      // Theatre style applies per-phase easing internally; use linear globally.
-      const ease = this.isTheatreStyle() ? 'none' : (this.options.ease || DEFAULT_OPTIONS.ease);
-      return window.gsap.to(this.state, {
-        progress: targetProgress,
+      if (this._tween) {
+        try { this._tween.kill(); } catch (e) { /* ignore */ }
+      }
+      this._tween = window.gsap.to(this.state, {
+        progress: target,
         duration,
         ease,
-        onUpdate: this.draw,
         onComplete: () => {
-          this.draw();
-          this.log('animation complete', {
-            animationId: this.debugAnimationId,
-            progress: Number(this.state.progress.toFixed(3)),
-          });
+          try {
+            document.body.dispatchEvent(new Event('paper-curtain'));
+          } catch (e) { /* ignore */ }
+          this._log('animation complete', { progress: this.state.progress });
         },
       });
+      return this._tween;
     }
 
-    cancelAnimationFrame(this.animationFrame);
-    const startTime = performance.now();
-    const useLinear = this.isTheatreStyle();
-
-    const tick = (now) => {
-      const elapsed = (now - startTime) / 1000;
-      const time = clamp(elapsed / duration, 0, 1);
-      const eased = useLinear ? time : fallbackEase(time);
-      this.state.progress = startProgress + (targetProgress - startProgress) * eased;
-      this.draw();
-      if (time < 1) {
-        this.animationFrame = requestAnimationFrame(tick);
-      } else {
-        this.log('animation complete', {
-          animationId: this.debugAnimationId,
-          progress: Number(this.state.progress.toFixed(3)),
-        });
+    // Fallback rAF tween (cubic ease-in-out).
+    const start = performance.now();
+    const startProgress = this.state.progress;
+    const easeFn = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    const step = (now) => {
+      if (this._destroyed) return;
+      const t = Math.max(0, Math.min(1, (now - start) / (duration * 1000)));
+      this.state.progress = startProgress + (target - startProgress) * easeFn(t);
+      if (t < 1) requestAnimationFrame(step);
+      else {
+        try {
+          document.body.dispatchEvent(new Event('paper-curtain'));
+        } catch (e) { /* ignore */ }
       }
     };
-
-    this.animationFrame = requestAnimationFrame(tick);
+    requestAnimationFrame(step);
     return null;
   }
 
-  // ─── classic (non-theatre) shapes ─────────────────────────────────────────
-
-  getEdgePoint(index, count, length, depth) {
-    const t = count <= 1 ? 0 : index / (count - 1);
-    const { curveFrequency, curveAmplitude, rippedFrequency, rippedAmplitude, rippedDelta, rippedHeight } = this.options;
-    const softWave =
-      Math.sin(t * Math.PI * Math.max(0.25, curveFrequency) + this.seed * 0.01) * length * curveAmplitude * 0.18;
-    const tornWave =
-      Math.sin(t * TAU * Math.max(0.25, rippedFrequency) + this.seed * 0.03) * length * rippedAmplitude;
-    const grain =
-      (noise(t * 42 + index * 0.13, this.seed + rippedDelta) - 0.5) * length * rippedHeight * 0.8;
-    const tooth =
-      Math.sin(t * TAU * Math.max(0.5, rippedFrequency * 2.8) + this.seed * 0.07) * length * rippedAmplitude * 0.22;
-    const notchNoise = noise(t * 115 + index * 0.31, this.seed + rippedDelta + 41);
-    const notch = Math.pow(notchNoise, 8) * length * rippedHeight * 1.45;
-    return depth + softWave + tornWave + grain + tooth - notch;
-  }
-
-  getDepth(width, height, progress, offset = 0) {
-    const horizontal = Boolean(this.options.horizontal);
-    const travelLength = horizontal ? width : height;
-    const roughness = clamp(Number(this.options.amplitude) || 0.25, 0, 1);
-    const overscan = travelLength * (0.08 + roughness * 0.08);
-    return progress * (travelLength + overscan * 2) - overscan + offset;
-  }
-
-  tracePaperShape(width, height, progress, offset = 0) {
-    const ctx = this.ctx;
-    const horizontal = Boolean(this.options.horizontal);
-    const crossLength = horizontal ? height : width;
-    const depth = this.getDepth(width, height, progress, offset);
-    const steps = Math.max(28, Math.round(crossLength / 28));
-
-    ctx.beginPath();
-    if (horizontal) {
-      ctx.moveTo(0, 0);
-      ctx.lineTo(depth, 0);
-      for (let i = 0; i <= steps; i += 1) {
-        const y = (i / steps) * height;
-        const x = this.getEdgePoint(i, steps + 1, width, depth);
-        ctx.lineTo(x, y);
-      }
-      ctx.lineTo(0, height);
-      ctx.closePath();
-      return;
-    }
-    ctx.moveTo(0, 0);
-    ctx.lineTo(width, 0);
-    for (let i = 0; i <= steps; i += 1) {
-      const x = width - (i / steps) * width;
-      const y = this.getEdgePoint(i, steps + 1, height, depth);
-      ctx.lineTo(x, y);
-    }
-    ctx.lineTo(0, 0);
-    ctx.closePath();
-  }
-
-  traceLeadingEdge(width, height, progress, offset = 0) {
-    const ctx = this.ctx;
-    const horizontal = Boolean(this.options.horizontal);
-    const crossLength = horizontal ? height : width;
-    const depth = this.getDepth(width, height, progress, offset);
-    const steps = Math.max(28, Math.round(crossLength / 28));
-
-    ctx.beginPath();
-    if (horizontal) {
-      for (let i = 0; i <= steps; i += 1) {
-        const y = (i / steps) * height;
-        const x = this.getEdgePoint(i, steps + 1, width, depth);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      return;
-    }
-    for (let i = 0; i <= steps; i += 1) {
-      const x = width - (i / steps) * width;
-      const y = this.getEdgePoint(i, steps + 1, height, depth);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-  }
-
-  // ─── classic rendering ─────────────────────────────────────────────────
-
-  drawPaperShadow(width, height, progress) {
-    const ctx = this.ctx;
-    const horizontal = Boolean(this.options.horizontal);
-    const minSide = Math.min(width, height);
-    const shadowStrength = clamp(Number(this.options.shadowOpacity) || 0, 0, 1) * progress;
-    if (shadowStrength <= 0.001) return;
-
-    ctx.save();
-    ctx.shadowColor = `rgba(0, 0, 0, ${shadowStrength})`;
-    ctx.shadowBlur = Math.max(18, minSide * 0.045);
-    ctx.shadowOffsetX = horizontal ? Math.max(10, width * 0.018) : 0;
-    ctx.shadowOffsetY = horizontal ? 0 : Math.max(10, height * 0.018);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
-    this.tracePaperShape(width, height, progress);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  drawPaperTexture(width, height, progress) {
-    const ctx = this.ctx;
-    const grainOpacity = clamp(Number(this.options.grainOpacity) || 0, 0, 1);
-    const fiberOpacity = clamp(Number(this.options.fiberOpacity) || 0, 0, 1);
-    const warmth = clamp(Number(this.options.warmTint) || 0, 0, 1);
-    const minSide = Math.min(width, height);
-
-    // Optional user-supplied texture image
-    if (this.pattern) {
-      ctx.save();
-      ctx.globalAlpha = 0.18 * progress;
-      ctx.fillStyle = this.pattern;
-      ctx.fillRect(0, 0, width, height);
-      ctx.restore();
-    }
-
-    // Layer 1 — large soft warm/cool blotches: low-frequency organic variation
-    ctx.save();
-    ctx.globalCompositeOperation = 'overlay';
-    ctx.globalAlpha = clamp(grainOpacity * 1.6, 0, 1) * progress;
-    for (let i = 0; i < 14; i += 1) {
-      const cx = noise(i * 7.1, this.seed) * width;
-      const cy = noise(i * 4.3, this.seed + 11) * height;
-      const r = minSide * (0.18 + noise(i * 2.7, this.seed + 19) * 0.24);
-      const bias = noise(i * 9.2, this.seed + 33);
-      const tint = bias > 0.5
-        ? `rgba(${220 - warmth * 10}, ${190 - warmth * 5}, ${160 - warmth * 20}, ${0.32 - bias * 0.12})`
-        : `rgba(${50 + warmth * 18}, ${42 + warmth * 8}, ${36}, ${0.42 - bias * 0.18})`;
-      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-      grad.addColorStop(0, tint);
-      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, TAU);
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // Layer 2 — long thin fibres: varied width, alpha, drift
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 72; i += 1) {
-      const y = noise(i * 5.9, this.seed + 91) * height;
-      const startX = noise(i * 3.7, this.seed + 42) * width * 0.2;
-      const endX = lerp(width * 0.55, width * 1.18, noise(i * 2.1, this.seed + 22));
-      const drift = (noise(i * 8.2, this.seed + 15) - 0.5) * height * 0.06;
-      const w = 0.35 + noise(i * 11.3, this.seed + 7) * 0.65;
-      const a = (0.25 + noise(i * 6.4, this.seed + 51) * 0.5) * fiberOpacity;
-      ctx.lineWidth = w;
-      ctx.strokeStyle = `rgba(${245 - warmth * 8}, ${235 - warmth * 4}, ${215 - warmth * 18}, ${a * progress})`;
-      ctx.beginPath();
-      ctx.moveTo(startX, y);
-      ctx.bezierCurveTo(width * 0.28, y + drift, width * 0.62, y - drift, endX, y + drift * 0.4);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // Layer 3 — fine specks: high-frequency embedded particles
-    ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = grainOpacity * 0.55 * progress;
-    for (let i = 0; i < 200; i += 1) {
-      const x = noise(i * 13.7, this.seed + 5) * width;
-      const y = noise(i * 11.2, this.seed + 17) * height;
-      const r = 0.4 + noise(i * 3.1, this.seed + 41) * 1.1;
-      const a = 0.4 + noise(i * 5.5, this.seed + 31) * 0.5;
-      ctx.fillStyle = `rgba(18, 12, 8, ${a})`;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, TAU);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-
-  // ─── premium passes (vignette, film grain) ────────────────────────────
-
-  drawVignette(width, height, intensity) {
-    const amount = clamp(Number(intensity) || 0, 0, 1);
-    if (amount <= 0.001) return;
-    const ctx = this.ctx;
-    const cx = width / 2;
-    const cy = height / 2;
-    const maxR = Math.hypot(cx, cy);
-    const grad = ctx.createRadialGradient(cx, cy, maxR * 0.42, cx, cy, maxR);
-    grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    grad.addColorStop(0.55, `rgba(0, 0, 0, ${amount * 0.32})`);
-    grad.addColorStop(1, `rgba(0, 0, 0, ${amount})`);
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-  }
-
-  _buildGrainCanvases() {
-    if (this._grainCanvases.length > 0) return;
-    const SIZE = 256;
-    const FRAMES = 4;
-    for (let f = 0; f < FRAMES; f += 1) {
-      const c = document.createElement('canvas');
-      c.width = SIZE;
-      c.height = SIZE;
-      const cctx = c.getContext('2d');
-      const img = cctx.createImageData(SIZE, SIZE);
-      for (let p = 0; p < img.data.length; p += 4) {
-        const v = (Math.random() * 255) | 0;
-        img.data[p] = v;
-        img.data[p + 1] = v;
-        img.data[p + 2] = v;
-        img.data[p + 3] = 255;
-      }
-      cctx.putImageData(img, 0, 0);
-      this._grainCanvases.push(c);
-    }
-  }
-
-  drawFilmGrain(width, height, opacity) {
-    const amount = clamp(Number(opacity) || 0, 0, 1);
-    if (amount <= 0.001) return;
-    this._buildGrainCanvases();
-
-    const now = performance.now();
-    if (now - this._lastGrainSwap > 50) {
-      this._grainFrame = (this._grainFrame + 1) % this._grainCanvases.length;
-      this._lastGrainSwap = now;
-    }
-
-    const grainCanvas = this._grainCanvases[this._grainFrame];
-    const ctx = this.ctx;
-    const pattern = ctx.createPattern(grainCanvas, 'repeat');
-    if (!pattern) return;
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'overlay';
-    ctx.globalAlpha = amount;
-    ctx.fillStyle = pattern;
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-  }
-
-  drawDepthWash(width, height, progress) {
-    const ctx = this.ctx;
-    const horizontal = Boolean(this.options.horizontal);
-    const gradient = horizontal
-      ? ctx.createLinearGradient(0, 0, width, 0)
-      : ctx.createLinearGradient(0, 0, 0, height);
-
-    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.16)');
-    gradient.addColorStop(0.42, 'rgba(255, 255, 255, 0.02)');
-    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.22)');
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'overlay';
-    ctx.globalAlpha = 0.7 * progress;
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-  }
-
-  drawLeadingEdge(width, height, progress) {
-    const ctx = this.ctx;
-    const minSide = Math.min(width, height);
-    const edgeAlpha = clamp(Number(this.options.edgeHighlightOpacity) || 0, 0, 1) * progress;
-    const lineWidth = Math.max(1, minSide * 0.0035);
-    if (edgeAlpha <= 0.001) return;
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = `rgba(0, 0, 0, ${edgeAlpha * 0.82})`;
-    ctx.lineWidth = lineWidth * 1.75;
-    this.traceLeadingEdge(width, height, progress, lineWidth * 2.2);
-    ctx.stroke();
-    ctx.restore();
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = `rgba(255, 255, 255, ${edgeAlpha})`;
-    ctx.lineWidth = lineWidth;
-    this.traceLeadingEdge(width, height, progress, -lineWidth * 0.7);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // ─── theatre seam geometry ────────────────────────────────────────────────
-
-  getTheatreSeamPoints(width, height, progress, side) {
-    const steps = Math.max(48, Math.round(height / 18));
-    const points = [];
-    const open = clamp(progress, 0, 1);
-    const openPower = Math.pow(open, 1.12);
-    const pull = openPower * width * 0.16;
-    const gap = openPower * (width * 0.64 + Math.min(width, height) * 0.16);
-    const tension = Math.sin(open * Math.PI);
-    const seamIntensity = clamp(Number(this.options.seamIntensity) || 0.9, 0, 2);
-    const tearScale = Math.min(width, height) * (0.018 + seamIntensity * 0.022);
-    const waveScale = width * (0.006 + seamIntensity * 0.009);
-    const sideSign = side === 'left' ? -1 : 1;
-
-    for (let i = 0; i <= steps; i += 1) {
-      const t = i / steps;
-      const y = t * height;
-      const highWave = Math.sin(t * TAU * 5.6 + this.seed * 0.021) * waveScale * (0.8 + tension * 1.6);
-      const lowWave = Math.sin(t * Math.PI * 1.45 + this.seed * 0.009) * width * 0.012 * (0.35 + tension);
-      const paperTooth = (noise(t * 91 + i * 0.13, this.seed + sideSign * 17) - 0.5) * tearScale * (0.75 + tension);
-      const deepCut = Math.pow(noise(t * 37 + i * 0.47, this.seed + sideSign * 31), 9) * tearScale * 2.35 * sideSign;
-      const center = width / 2 + lowWave + highWave * 0.45;
-      const edge = center + sideSign * gap + paperTooth + deepCut + sideSign * pull * 0.2;
-      points.push({ x: edge, y });
-    }
-
-    return points;
-  }
-
-  traceTheatreHalf(width, height, progress, side, offset = 0) {
-    const ctx = this.ctx;
-    const sideSign = side === 'left' ? -1 : 1;
-    const open = clamp(progress, 0, 1);
-    const openPower = Math.pow(open, 1.12);
-    const overscan = Math.max(width, height) * 0.16;
-    const pull = openPower * width * 0.18;
-    const edgePoints = this.getTheatreSeamPoints(width, height, progress, side);
-    const outerX = side === 'left' ? -overscan - pull : width + overscan + pull;
-
-    ctx.beginPath();
-    ctx.moveTo(outerX, -overscan);
-    ctx.lineTo(edgePoints[0].x + offset * sideSign, -overscan);
-    edgePoints.forEach((point) => {
-      ctx.lineTo(point.x + offset * sideSign, point.y);
-    });
-    ctx.lineTo(outerX, height + overscan);
-    ctx.closePath();
-  }
-
-  traceTheatreEdge(width, height, progress, side, offset = 0) {
-    const ctx = this.ctx;
-    const sideSign = side === 'left' ? -1 : 1;
-    const edgePoints = this.getTheatreSeamPoints(width, height, progress, side);
-
-    ctx.beginPath();
-    edgePoints.forEach((point, index) => {
-      const x = point.x + offset * sideSign;
-      if (index === 0) ctx.moveTo(x, point.y);
-      else ctx.lineTo(x, point.y);
-    });
-  }
-
-  // ─── theatre half rendering ───────────────────────────────────────────────
-
-  drawTheatreHalfBase(width, height, progress, side) {
-    const ctx = this.ctx;
-    const sideSign = side === 'left' ? -1 : 1;
-    const open = clamp(progress, 0, 1);
-    const tension = Math.sin(open * Math.PI);
-    const gradient = ctx.createLinearGradient(side === 'left' ? 0 : width, 0, width / 2, height);
-
-    gradient.addColorStop(0, this.options.background);
-    gradient.addColorStop(0.18, this.options.color);
-    gradient.addColorStop(0.68, this.options.color);
-    gradient.addColorStop(1, this.options.background);
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(-width * 0.25, -height * 0.1, width * 1.5, height * 1.2);
-    this.drawDepthWash(width, height, 0.55 + progress * 0.45);
-    this.drawPaperTexture(width, height, 0.85 + progress * 0.15);
-    this.drawVignette(width, height, this.options.vignetteIntensity * 0.7);
-    this.drawTheatreFolds(width, height, progress, side, sideSign, tension);
-  }
-
-  drawTheatreFolds(width, height, progress, side, sideSign, tension) {
-    const ctx = this.ctx;
-    const foldCount = Math.max(3, Math.round(Number(this.options.foldCount) || 7));
-    const foldIntensity = clamp(Number(this.options.foldIntensity) || 0.38, 0, 1.4);
-    const spanStart = side === 'left' ? -width * 0.18 : width * 0.5;
-    const spanWidth = width * 0.68;
-    const openBoost = 0.3 + tension * 0.9 + progress * 0.55;
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-
-    for (let i = 0; i < foldCount; i += 1) {
-      const local = foldCount <= 1 ? 0 : i / (foldCount - 1);
-      const x = side === 'left'
-        ? spanStart + local * spanWidth
-        : width - (spanStart + local * spanWidth);
-      const foldWidth = width * (0.035 + noise(i * 3.4, this.seed + 75) * 0.035);
-      const alpha = (0.08 + noise(i * 2.7, this.seed + 28) * 0.13) * foldIntensity * openBoost;
-      const foldGradient = ctx.createLinearGradient(x - foldWidth, 0, x + foldWidth, 0);
-      foldGradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
-      foldGradient.addColorStop(0.48, `rgba(0, 0, 0, ${alpha})`);
-      foldGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-      ctx.fillStyle = foldGradient;
-      ctx.beginPath();
-      ctx.moveTo(x - foldWidth, -height * 0.1);
-      ctx.bezierCurveTo(
-        x + sideSign * width * 0.028, height * 0.26,
-        x - sideSign * width * 0.035, height * 0.72,
-        x + sideSign * width * 0.014, height * 1.1,
-      );
-      ctx.lineTo(x + foldWidth, height * 1.1);
-      ctx.lineTo(x + foldWidth, -height * 0.1);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    ctx.restore();
-
-    // Specular highlights: narrow warm peak at the crease apex with soft falloff
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    const warmth = clamp(Number(this.options.warmTint) || 0, 0, 1);
-
-    for (let i = 0; i < foldCount - 1; i += 1) {
-      const local = (i + 0.5) / foldCount;
-      const x = side === 'left'
-        ? spanStart + local * spanWidth
-        : width - (spanStart + local * spanWidth);
-      const wide = width * 0.034;
-      const peak = width * 0.004;
-      const baseA = 0.06 * foldIntensity * openBoost;
-      const peakA = 0.16 * foldIntensity * openBoost;
-
-      // Wide soft glow
-      const wideGrad = ctx.createLinearGradient(x - wide, 0, x + wide, 0);
-      wideGrad.addColorStop(0, 'rgba(255, 245, 220, 0)');
-      wideGrad.addColorStop(0.5, `rgba(${255}, ${245 - warmth * 8}, ${220 - warmth * 22}, ${baseA})`);
-      wideGrad.addColorStop(1, 'rgba(255, 245, 220, 0)');
-      ctx.fillStyle = wideGrad;
-      ctx.fillRect(x - wide, -height * 0.1, wide * 2, height * 1.2);
-
-      // Sharp narrow specular peak (the crease itself)
-      const peakGrad = ctx.createLinearGradient(x - peak, 0, x + peak, 0);
-      peakGrad.addColorStop(0, 'rgba(255, 250, 232, 0)');
-      peakGrad.addColorStop(0.5, `rgba(255, ${252 - warmth * 6}, ${238 - warmth * 16}, ${peakA})`);
-      peakGrad.addColorStop(1, 'rgba(255, 250, 232, 0)');
-      ctx.fillStyle = peakGrad;
-      ctx.fillRect(x - peak, -height * 0.1, peak * 2, height * 1.2);
-    }
-
-    ctx.restore();
-  }
-
-  drawTheatreEdge(width, height, progress, side) {
-    const ctx = this.ctx;
-    const minSide = Math.min(width, height);
-    const edgeAlpha = clamp(Number(this.options.edgeHighlightOpacity) || 0, 0, 1);
-    const lineWidth = Math.max(1.2, minSide * 0.004);
-    const sideSign = side === 'left' ? -1 : 1;
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = `rgba(0, 0, 0, ${edgeAlpha * 0.85})`;
-    ctx.lineWidth = lineWidth * 2.2;
-    this.traceTheatreEdge(width, height, progress, side, lineWidth * 1.9);
-    ctx.stroke();
-    ctx.restore();
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = `rgba(255, 255, 255, ${edgeAlpha * 0.9})`;
-    ctx.lineWidth = lineWidth;
-    this.traceTheatreEdge(width, height, progress, side, -lineWidth * 0.65);
-    ctx.stroke();
-    ctx.restore();
-
-    this.drawTheatreFibers(width, height, progress, side, sideSign);
-  }
-
-  drawTheatreFibers(width, height, progress, side, sideSign) {
-    const ctx = this.ctx;
-    const count = Math.max(16, Math.round(Number(this.options.fiberCount) || 64));
-    const tension = Math.sin(progress * Math.PI);
-    const edgePoints = this.getTheatreSeamPoints(width, height, progress, side);
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = (0.18 + tension * 0.32) * clamp(Number(this.options.fiberOpacity) || 0.15, 0, 1);
-    ctx.strokeStyle = 'rgba(245, 238, 219, 0.9)';
-    ctx.lineWidth = Math.max(0.7, Math.min(width, height) * 0.0012);
-
-    for (let i = 0; i < count; i += 1) {
-      const point = edgePoints[Math.floor(noise(i * 4.3, this.seed + sideSign * 54) * edgePoints.length)];
-      if (!point) continue;
-      const fLen = (10 + noise(i * 7.7, this.seed + 24) * 38) * (0.45 + tension);
-      const yDrift = (noise(i * 5.1, this.seed + 64) - 0.5) * 15;
-      ctx.beginPath();
-      ctx.moveTo(point.x, point.y);
-      ctx.quadraticCurveTo(
-        point.x - sideSign * fLen * 0.45,
-        point.y + yDrift,
-        point.x - sideSign * fLen,
-        point.y + yDrift * 0.35,
-      );
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
-
-  drawTheatreSeam(width, height, progress) {
-    const ctx = this.ctx;
-    const seamFade = 1 - smoothstep(0.02, 0.32, progress);
-    const leftEdge = this.getTheatreSeamPoints(width, height, 0, 'left');
-    const rightEdge = this.getTheatreSeamPoints(width, height, 0, 'right');
-    if (seamFade <= 0.001) return;
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.globalAlpha = seamFade;
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
-    ctx.lineWidth = Math.max(1, Math.min(width, height) * 0.003);
-    ctx.beginPath();
-    leftEdge.forEach((point, index) => {
-      const rightPoint = rightEdge[index] || point;
-      const x = (point.x + rightPoint.x) / 2;
-      if (index === 0) ctx.moveTo(x, point.y);
-      else ctx.lineTo(x, point.y);
-    });
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  drawTheatreHalf(width, height, progress, side) {
-    const ctx = this.ctx;
-    const minSide = Math.min(width, height);
-    const shadowStrength = clamp(Number(this.options.shadowOpacity) || 0, 0, 1);
-    const tension = Math.sin(progress * Math.PI);
-    const sideSign = side === 'left' ? -1 : 1;
-
-    ctx.save();
-    ctx.shadowColor = `rgba(0, 0, 0, ${shadowStrength * (0.35 + tension * 0.85)})`;
-    ctx.shadowBlur = Math.max(18, minSide * (0.032 + tension * 0.03));
-    ctx.shadowOffsetX = -sideSign * Math.max(8, width * 0.018) * (0.4 + progress);
-    ctx.shadowOffsetY = Math.max(5, height * 0.01) * tension;
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
-    this.traceTheatreHalf(width, height, progress, side);
-    ctx.fill();
-    ctx.restore();
-
-    ctx.save();
-    this.traceTheatreHalf(width, height, progress, side);
-    ctx.clip();
-    this.drawTheatreHalfBase(width, height, progress, side);
-    ctx.restore();
-
-    this.drawTheatreEdge(width, height, progress, side);
-  }
-
-  drawTheatreClosedSheet(width, height, progress, alphaOverride = null) {
-    const ctx = this.ctx;
-    const alpha = alphaOverride !== null ? alphaOverride : 1 - smoothstep(0.035, 0.24, progress);
-    if (alpha <= 0.001) return;
-
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, this.options.background);
-    gradient.addColorStop(0.18, this.options.color);
-    gradient.addColorStop(0.72, this.options.color);
-    gradient.addColorStop(1, this.options.background);
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-    this.drawDepthWash(width, height, 0.9);
-    this.drawPaperTexture(width, height, 0.86);
-    this.drawVignette(width, height, this.options.vignetteIntensity);
-    this.drawFilmGrain(width, height, this.options.filmGrainOpacity * alpha);
-    ctx.restore();
-  }
-
-  drawTheatreDust(width, height, progress) {
-    const ctx = this.ctx;
-    const open = clamp(progress, 0, 1);
-    const burst = smoothstep(0.06, 0.34, open) * (1 - smoothstep(0.52, 1, open));
-    const dustOpacity = clamp(Number(this.options.dustOpacity) || 0.25, 0, 1);
-    if (burst <= 0.001 || dustOpacity <= 0.001) return;
-
-    const count = Math.max(20, Math.round(Number(this.options.dustCount) || 110));
-    const leftEdge = this.getTheatreSeamPoints(width, height, open, 'left');
-    const rightEdge = this.getTheatreSeamPoints(width, height, open, 'right');
-    const useBokeh = this.options.bokehGlow !== false;
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-
-    for (let i = 0; i < count; i += 1) {
-      const sideSign = noise(i * 2.7, this.seed + 99) > 0.5 ? -1 : 1;
-      const edge = sideSign < 0 ? leftEdge : rightEdge;
-      const edgePoint = edge[Math.floor(noise(i * 4.9, this.seed + 71) * edge.length)];
-      if (!edgePoint) continue;
-
-      const travel = (18 + noise(i * 3.2, this.seed + 44) * Math.min(width, height) * 0.09) * open;
-      const drift = (noise(i * 6.7, this.seed + 18) - 0.5) * height * 0.08 * open;
-      const x = edgePoint.x - sideSign * travel;
-      const y = edgePoint.y + drift;
-      const radius = 0.8 + noise(i * 9.1, this.seed + 28) * 2.8;
-      const alpha = dustOpacity * burst * (0.35 + noise(i * 8.4, this.seed + 7) * 0.65);
-
-      // Warm/cool/peach colour variation per particle
-      const hueRoll = noise(i * 12.3, this.seed + 17);
-      const core = hueRoll > 0.66
-        ? 'rgba(255, 232, 196,' // warm peach
-        : hueRoll > 0.33
-          ? 'rgba(255, 248, 224,' // cream
-          : 'rgba(238, 240, 250,'; // cool
-
-      if (useBokeh) {
-        // Soft halo ring
-        const haloR = radius * 5;
-        const halo = ctx.createRadialGradient(x, y, 0, x, y, haloR);
-        halo.addColorStop(0, `${core} ${alpha * 0.55})`);
-        halo.addColorStop(0.4, `${core} ${alpha * 0.16})`);
-        halo.addColorStop(1, `${core} 0)`);
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = halo;
-        ctx.fillRect(x - haloR, y - haloR, haloR * 2, haloR * 2);
-      }
-
-      // Bright core
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = `${core} 0.95)`;
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, TAU);
-      ctx.fill();
-    }
-
-    ctx.restore();
-  }
-
-  // ─── NEW: loader bar ─────────────────────────────────────────────────────
-
-  drawLoaderBar(width, height, alpha = 1) {
-    if (!this.options.showLoader || alpha <= 0.001) return;
-
-    const ctx = this.ctx;
-    const loadProgress = clamp(this.state.loadProgress || 0, 0, 1);
-    const barW = clamp(width * 0.22, 160, 320);
-    const barH = Math.max(1.5, Math.min(width, height) * 0.0018);
-    const barX = (width - barW) / 2;
-    const barY = height * 0.82;
-    const r = barH / 2;
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-
-    // track
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.beginPath();
-    roundRect(ctx, barX, barY, barW, barH, r);
-    ctx.fill();
-
-    if (loadProgress > 0.001) {
-      const fillW = Math.max(barH * 2, barW * loadProgress);
-      ctx.fillStyle = this.options.loaderColor || 'rgba(255, 255, 255, 0.55)';
-      ctx.globalAlpha = alpha * 0.72;
-      ctx.beginPath();
-      roundRect(ctx, barX, barY, fillW, barH, r);
-      ctx.fill();
-
-      // leading-edge glow
-      if (loadProgress < 0.995) {
-        const glowX = barX + fillW;
-        const glowR = barH * 5;
-        const glow = ctx.createRadialGradient(glowX, barY + r, 0, glowX, barY + r, glowR);
-        glow.addColorStop(0, `rgba(255, 245, 220, ${0.85 * alpha})`);
-        glow.addColorStop(1, 'rgba(255, 245, 220, 0)');
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = glow;
-        ctx.fillRect(glowX - glowR, barY + r - glowR, glowR * 2, glowR * 2);
-      }
-    }
-
-    ctx.restore();
-  }
-
-  // ─── NEW: seam stress glow (anticipation phase) ───────────────────────────
-
-  drawSeamStress(width, height, anteT) {
-    const ctx = this.ctx;
-    const intensity = smoothstep(0.25, 1.0, anteT);
-    if (intensity <= 0.001) return;
-
-    const minSide = Math.min(width, height);
-    const cx = width / 2;
-    const grad = ctx.createLinearGradient(0, height * 0.08, 0, height * 0.92);
-    grad.addColorStop(0, 'rgba(255, 240, 200, 0)');
-    grad.addColorStop(0.12, `rgba(255, 242, 210, ${intensity * 0.5})`);
-    grad.addColorStop(0.5, `rgba(255, 252, 235, ${intensity * 0.78})`);
-    grad.addColorStop(0.88, `rgba(255, 242, 210, ${intensity * 0.5})`);
-    grad.addColorStop(1, 'rgba(255, 240, 200, 0)');
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.strokeStyle = grad;
-    ctx.lineWidth = Math.max(0.8, minSide * 0.0015) * (1 + intensity * 2.8);
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(cx, height * 0.08);
-    ctx.lineTo(cx, height * 0.92);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // ─── NEW: propagating tear crack ──────────────────────────────────────────
-
-  drawTearCrack(width, height, tearT) {
-    const ctx = this.ctx;
-    const minSide = Math.min(width, height);
-
-    // Crack tip accelerates as the tear runs away from the initiation point.
-    const tearY = height * easeOutExpo(tearT);
-
-    const leftEdge = this.getTheatreSeamPoints(width, height, 0, 'left');
-    const rightEdge = this.getTheatreSeamPoints(width, height, 0, 'right');
-
-    // Centre-line between the two seam edges up to the current tear depth.
-    const crackPoints = leftEdge
-      .map((lp, i) => ({ x: (lp.x + (rightEdge[i] || lp).x) / 2, y: lp.y }))
-      .filter(p => p.y <= tearY + 2);
-
-    if (crackPoints.length < 2) return;
-
-    // Helper to trace the crack path
-    const tracePath = (offsetX = 0) => {
-      ctx.beginPath();
-      crackPoints.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p.x + offsetX, p.y);
-        else ctx.lineTo(p.x + offsetX, p.y);
-      });
-    };
-
-    // Layer 1 — wide ambient shadow with real feathering (canvas shadowBlur)
-    ctx.save();
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-    ctx.shadowBlur = Math.max(6, minSide * 0.012);
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.lineWidth = Math.max(2.2, minSide * 0.0035);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    tracePath();
-    ctx.stroke();
-    ctx.restore();
-
-    // Layer 2 — deep core shadow (the void inside the rip)
-    ctx.save();
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.92)';
-    ctx.lineWidth = Math.max(1.6, minSide * 0.0024);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    tracePath();
-    ctx.stroke();
-    ctx.restore();
-
-    // Layer 3 — warm cross-section highlight (the visible inside of the torn fibre)
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.strokeStyle = 'rgba(255, 232, 188, 0.62)';
-    ctx.lineWidth = Math.max(0.7, minSide * 0.0011);
-    ctx.lineCap = 'round';
-    tracePath(1.6);
-    ctx.stroke();
-    // Secondary thinner highlight further right for depth
-    ctx.strokeStyle = 'rgba(255, 248, 220, 0.32)';
-    ctx.lineWidth = Math.max(0.5, minSide * 0.0007);
-    tracePath(2.6);
-    ctx.stroke();
-    ctx.restore();
-
-    // Layer 4 — broad warm ambient bloom around the whole crack (heat/light leak)
-    if (tearT > 0.05) {
-      const bloomAlpha = smoothstep(0.05, 0.4, tearT) * (1 - smoothstep(0.85, 1, tearT));
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      ctx.shadowColor = `rgba(255, 210, 150, ${0.5 * bloomAlpha})`;
-      ctx.shadowBlur = Math.max(14, minSide * 0.025);
-      ctx.strokeStyle = `rgba(255, 220, 160, ${0.18 * bloomAlpha})`;
-      ctx.lineWidth = Math.max(0.5, minSide * 0.0008);
-      ctx.lineCap = 'round';
-      tracePath();
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // Hot stress glow at the propagating tip
-    if (tearT > 0.03 && tearT < 0.97) {
-      const tip = crackPoints[crackPoints.length - 1];
-      const glowR = minSide * 0.058;
-      const gAlpha = smoothstep(0.03, 0.22, tearT) * (1 - smoothstep(0.76, 0.97, tearT));
-      const rg = ctx.createRadialGradient(tip.x, tip.y, 0, tip.x, tip.y, glowR);
-      rg.addColorStop(0, `rgba(255, 238, 185, ${0.92 * gAlpha})`);
-      rg.addColorStop(0.22, `rgba(255, 215, 130, ${0.44 * gAlpha})`);
-      rg.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      ctx.fillStyle = rg;
-      ctx.fillRect(tip.x - glowR, tip.y - glowR, glowR * 2, glowR * 2);
-      ctx.restore();
-    }
-
-    // Paper fibres dangling from the crack
-    const fiberAlpha = smoothstep(0.1, 0.52, tearT);
-    if (fiberAlpha > 0.001) {
-      ctx.save();
-      ctx.globalAlpha = fiberAlpha * 0.62;
-      ctx.strokeStyle = 'rgba(240, 228, 210, 0.9)';
-      ctx.lineWidth = Math.max(0.5, minSide * 0.0009);
-      ctx.lineCap = 'round';
-
-      for (let i = 0; i < 26; i += 1) {
-        const ni = noise(i * 4.1, this.seed + 82);
-        const p = crackPoints[Math.floor(ni * crackPoints.length)];
-        if (!p) continue;
-        const fLen = 5 + noise(i * 6.7, this.seed + 19) * 17;
-        const sign = noise(i * 3.3, this.seed + 55) > 0.5 ? 1 : -1;
-        const ang = (noise(i * 8.9, this.seed + 33) - 0.5) * 0.9;
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.quadraticCurveTo(
-          p.x + sign * fLen * 0.4 * Math.cos(ang),
-          p.y + fLen * 0.5,
-          p.x + sign * Math.cos(ang) * fLen,
-          p.y + Math.sin(ang) * fLen * 0.5 + fLen * 0.3,
-        );
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-  }
-
-  // ─── NEW: curl illusion on the inner edge of each half ────────────────────
-
-  drawTheatreCurlLayer(width, height, progress, side) {
-    const curlIntensity = clamp(Number(this.options.curlIntensity) || 0.14, 0, 0.5);
-    if (curlIntensity <= 0.001 || progress <= 0.001) return;
-
-    const ctx = this.ctx;
-    const sideSign = side === 'left' ? -1 : 1;
-    const openPower = Math.pow(progress, 1.12);
-    const gap = openPower * (width * 0.64 + Math.min(width, height) * 0.16);
-    const innerEdgeX = width / 2 + sideSign * gap * 0.5;
-    const curlW = width * curlIntensity * progress;
-
-    // Highlight on the curling paper face
-    const gx0 = innerEdgeX;
-    const gx1 = innerEdgeX + sideSign * curlW;
-    const highlightGrad = ctx.createLinearGradient(gx0, 0, gx1, 0);
-    highlightGrad.addColorStop(0, `rgba(255, 255, 255, ${0.22 * progress})`);
-    highlightGrad.addColorStop(0.28, `rgba(180, 165, 145, ${0.08 * progress})`);
-    highlightGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'overlay';
-    this.traceTheatreHalf(width, height, progress, side);
-    ctx.clip();
-    ctx.fillStyle = highlightGrad;
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-
-    // Depth shadow that implies paper thickness at the torn edge
-    const shadowW = Math.max(3, Math.min(width, height) * 0.009);
-    const depthGrad = ctx.createLinearGradient(gx0, 0, gx0 + sideSign * shadowW, 0);
-    depthGrad.addColorStop(0, `rgba(0, 0, 0, ${0.4 * progress})`);
-    depthGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    this.traceTheatreHalf(width, height, progress, side);
-    ctx.clip();
-    ctx.fillStyle = depthGrad;
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-  }
-
-  // ─── theatre master draw ──────────────────────────────────────────────────
-
-  drawTheatre(width, height, progress) {
-    const ctx = this.ctx;
-    const open = clamp(progress, 0, 1);
-
-    if (open >= 0.997) return;
-
-    const inAnticipation = open < ANTE_END;
-    const inTear = open >= ANTE_END && open < TEAR_END;
-    const inReveal = open >= TEAR_END;
-
-    const anteT = clamp(open / ANTE_END, 0, 1);
-    const tearT = clamp((open - ANTE_END) / (TEAR_END - ANTE_END), 0, 1);
-    // easeOutCubic gives the "snap" — halves fly apart fast then decelerate at edges.
-    const revealT = easeOutCubic(clamp((open - TEAR_END) / (1 - TEAR_END), 0, 1));
-
-    if (!inReveal) {
-      // Horizontal micro-jitter builds as anticipation peaks.
-      let shakeX = 0;
-      if (inAnticipation && anteT > 0.35) {
-        shakeX = Math.sin(anteT * Math.PI * 18) * width * 0.0025 * smoothstep(0.35, 1.0, anteT);
-      }
-
-      ctx.save();
-      if (shakeX !== 0) ctx.translate(shakeX, 0);
-
-      // Keep paper fully opaque — don't fade it during pre-reveal phases.
-      this.drawTheatreClosedSheet(width, height, open, 1.0);
-
-      // Seam stress glow and loader only on enter (not exit).
-      if (!this._isExiting) {
-        if (inAnticipation) this.drawSeamStress(width, height, anteT);
-        const loaderAlpha = inTear ? 1 - smoothstep(0.5, 0.95, tearT) : 1;
-        this.drawLoaderBar(width, height, loaderAlpha);
-      }
-
-      if (inTear) this.drawTearCrack(width, height, tearT);
-
-      ctx.restore();
-    } else {
-      this.drawTheatreHalf(width, height, revealT, 'left');
-      this.drawTheatreHalf(width, height, revealT, 'right');
-      this.drawTheatreCurlLayer(width, height, revealT, 'left');
-      this.drawTheatreCurlLayer(width, height, revealT, 'right');
-      this.drawTheatreSeam(width, height, revealT);
-      this.drawTheatreDust(width, height, revealT);
-      // Film grain on the receding halves — fades with the curtain.
-      const grainFade = 1 - smoothstep(0.5, 1, revealT);
-      this.drawFilmGrain(width, height, this.options.filmGrainOpacity * grainFade);
-    }
-
-    // Subtle screen veil that lifts as the reveal progresses.
-    ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.globalAlpha = (1 - smoothstep(0.18, 0.9, open)) * 0.08;
-    ctx.fillStyle = this.options.background;
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-  }
-
-  // ─── root draw ────────────────────────────────────────────────────────────
-
-  draw() {
-    if (!this.ctx) return;
-
-    const { width, height } = getCanvasSize(this.canvas);
-    const progress = clamp(this.state.progress, 0, 1);
-    const ctx = this.ctx;
-
-    ctx.clearRect(0, 0, width, height);
-    this.logProgress(progress, width, height);
-
-    if (this.isTheatreStyle()) {
-      this.drawTheatre(width, height, progress);
-      return;
-    }
-
-    if (progress <= 0.001) return;
-
-    ctx.save();
-    ctx.globalAlpha = clamp(Number(this.options.backgroundOpacity) || 0, 0, 1) * progress;
-    ctx.fillStyle = this.options.background;
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-
-    this.drawPaperShadow(width, height, progress);
-
-    ctx.save();
-    this.tracePaperShape(width, height, progress);
-    ctx.clip();
-
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, this.options.color);
-    gradient.addColorStop(0.52, this.options.color);
-    gradient.addColorStop(1, this.options.background);
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-    this.drawDepthWash(width, height, progress);
-    this.drawPaperTexture(width, height, progress);
-    ctx.restore();
-
-    this.drawLeadingEdge(width, height, progress);
-  }
-
-  // ─── cleanup ──────────────────────────────────────────────────────────────
-
-  destroy() {
-    cancelAnimationFrame(this.animationFrame);
-
-    if (window.gsap) {
-      window.gsap.killTweensOf(this.state);
-    }
-
-    if (this.resizeObserver) {
-      this.resizeObserver.disconnect();
-    } else {
-      window.removeEventListener('resize', this.resize);
-    }
-
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    this._grainCanvases = [];
+  _log(message, data) {
+    if (!this.options.debug && !window.__BLACKLETTER_PAPER_DEBUG__) return;
+    // eslint-disable-next-line no-console
+    console.log(`[${this.options.debugLabel}] ${message}`, data || {});
   }
 }
