@@ -24,6 +24,26 @@ import { Mesh } from 'https://unpkg.com/ogl@0.0.74/src/core/Mesh.js';
 import { Color } from 'https://unpkg.com/ogl@0.0.74/src/math/Color.js';
 import { Vec2 } from 'https://unpkg.com/ogl@0.0.74/src/math/Vec2.js';
 
+// Converts any valid CSS color string (named, rgb(), rgba(), hex) to a
+// #rrggbb hex string that OGL's Color class can parse. Falls back to
+// #000000 if the value is empty or unrecognised.
+function cssColorToHex(value) {
+  if (!value) return '#000000';
+  if (/^#[0-9A-Fa-f]{3,8}$/.test(value)) return value;
+  try {
+    const el = document.createElement('div');
+    document.head.appendChild(el);
+    el.style.color = value;
+    const rgb = getComputedStyle(el).color; // always "rgb(r, g, b)"
+    document.head.removeChild(el);
+    const m = rgb.match(/(\d+)/g);
+    if (m && m.length >= 3) {
+      return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
+    }
+  } catch (e) { /* ignore */ }
+  return '#000000';
+}
+
 const DEFAULT_OPTIONS = {
   color: '#1D1D1B',
   background: '#000000',
@@ -160,19 +180,12 @@ const FRAGMENT_SHADER = /* glsl */ `
   }
 
   // ─── Per-fragment lighting / paper feel ─────────────────────────────────
-  // Adds a subtle vignette, warm-cool gradient, fine grain, and centre-bias
-  // luminosity to break up flat color. Cheap — few extra ALU ops.
   vec3 paperLighting(vec3 base, vec2 uv) {
     // Soft warm/cool gradient (top warm, bottom cool, very subtle)
     vec3 warm = vec3(1.04, 1.01, 0.96);
     vec3 cool = vec3(0.96, 0.99, 1.03);
     vec3 tint = mix(cool, warm, uv.y * 0.5 + 0.5);
     base *= mix(vec3(1.0), tint, 0.18 * uWarmTint);
-
-    // Vignette (radial darken)
-    float r = length(uv - 0.5) * 1.414;
-    float vig = 1.0 - smoothstep(0.55, 1.05, r) * 0.42;
-    base *= vig;
 
     // Fine static grain
     float g = hash21(uv * vec2(uAspect * 1200.0, 1200.0));
@@ -373,8 +386,8 @@ class PaperCurtain {
       uRippedDelta:          { value: opts.rippedDelta },
       uImage:                { value: new Texture(gl) },
       uRatio:                { value: new Vec2(0, 0) },
-      uColor:                { value: new Color(opts.color) },
-      uBackground:           { value: new Color(opts.background) },
+      uColor:                { value: new Color(cssColorToHex(opts.color)) },
+      uBackground:           { value: new Color(cssColorToHex(opts.background)) },
       uBackgroundOpacity:    { value: opts.backgroundOpacity },
       uInverted:             { value: false },
       uHorizontal:           { value: opts.horizontal ? 1 : 0 },
@@ -382,7 +395,7 @@ class PaperCurtain {
       uWarmTint:             { value: opts.warmTint },
       uShowLoader:           { value: opts.showLoader ? 1 : 0 },
       uLoadProgress:         { value: 0 },
-      uLoaderColor:          { value: new Color(opts.loaderColor) },
+      uLoaderColor:          { value: new Color(cssColorToHex(opts.loaderColor)) },
     };
 
     this.program = new Program(gl, {
@@ -396,11 +409,11 @@ class PaperCurtain {
   }
 
   setColor(color) {
-    if (color) this.uniforms.uColor.value.set(color);
+    if (color) this.uniforms.uColor.value.set(cssColorToHex(color));
   }
 
   setBackground(color, opacity) {
-    if (color) this.uniforms.uBackground.value.set(color);
+    if (color) this.uniforms.uBackground.value.set(cssColorToHex(color));
     if (opacity != null) this.uniforms.uBackgroundOpacity.value = opacity;
   }
 
