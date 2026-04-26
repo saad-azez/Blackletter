@@ -65,6 +65,7 @@ const DEFAULT_OPTIONS = {
   showLoader: true,
   loaderColor: '#f5edcc',
   warmTint: 0.6,
+  grainOpacity: 1.0,
   debug: false,
   debugLabel: 'BlackletterPaperCurtain',
 };
@@ -121,6 +122,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform float uShowLoader;
   uniform float uLoadProgress;
   uniform vec3  uLoaderColor;
+  uniform float uGrainOpacity;
 
   uniform float uTime;
 
@@ -197,11 +199,11 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     // Fine static grain
     float g = hash21(uv * vec2(uAspect * 1200.0, 1200.0));
-    base += (g - 0.5) * 0.04;
+    base += (g - 0.5) * 0.04 * uGrainOpacity;
 
     // Animated film grain — subtle drift
     float fg = hash21(uv * vec2(uAspect * 700.0, 700.0) + vec2(uTime * 17.0, uTime * 23.0));
-    base += (fg - 0.5) * 0.025;
+    base += (fg - 0.5) * 0.025 * uGrainOpacity;
 
     return base;
   }
@@ -276,7 +278,7 @@ const FRAGMENT_SHADER = /* glsl */ `
       if (!inReveal) {
         // Closed sheet — full paper covering everything.
         vec4 paper = paperSample(vImageUv);
-        paper.rgb = colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb);
+        paper.rgb = mix(paper.rgb, colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb), uGrainOpacity);
         paper.rgb = paperLighting(paper.rgb, vUv);
         gl_FragColor = paper;
 
@@ -323,13 +325,13 @@ const FRAGMENT_SHADER = /* glsl */ `
       } else if (dist > colorLimit) {
         // Outer paper still attached.
         vec4 paper = paperSample(vImageUv);
-        paper.rgb = colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb);
+        paper.rgb = mix(paper.rgb, colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb), uGrainOpacity);
         paper.rgb = paperLighting(paper.rgb, vUv);
         gl_FragColor = paper;
       } else if (dist > rippedLimit) {
         // Torn paper band — colorize the fibre texture with uColor.
         vec3 ripTex = texture2D(uTexture, aspectUv).rgb;
-        gl_FragColor.rgb = colorize(ripTex, uColor);
+        gl_FragColor.rgb = mix(uColor, colorize(ripTex, uColor), uGrainOpacity);
         gl_FragColor.a   = 1.0;
       }
     } else {
@@ -353,12 +355,12 @@ const FRAGMENT_SHADER = /* glsl */ `
 
       if (axis > colorLimit) {
         vec4 paper = paperSample(vImageUv);
-        paper.rgb = colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb);
+        paper.rgb = mix(paper.rgb, colorize(texture2D(uTexture, aspectUv * 2.0).rgb, paper.rgb), uGrainOpacity);
         paper.rgb = paperLighting(paper.rgb, vUv);
         gl_FragColor = paper;
       } else if (axis > rippedLimit) {
         vec3 ripTex = texture2D(uTexture, aspectUv).rgb;
-        gl_FragColor.rgb = colorize(ripTex, uColor);
+        gl_FragColor.rgb = mix(uColor, colorize(ripTex, uColor), uGrainOpacity);
         gl_FragColor.a   = 1.0;
       }
     }
@@ -408,6 +410,7 @@ class PaperCurtain {
       uShowLoader:           { value: opts.showLoader ? 1 : 0 },
       uLoadProgress:         { value: 0 },
       uLoaderColor:          { value: new Color(cssColorToHex(opts.loaderColor)) },
+      uGrainOpacity:         { value: opts.grainOpacity !== undefined ? opts.grainOpacity : 1.0 },
     };
 
     this.program = new Program(gl, {
@@ -427,6 +430,10 @@ class PaperCurtain {
   setBackground(color, opacity) {
     if (color) this.uniforms.uBackground.value.set(cssColorToHex(color));
     if (opacity != null) this.uniforms.uBackgroundOpacity.value = opacity;
+  }
+
+  setGrainOpacity(value) {
+    this.uniforms.uGrainOpacity.value = Math.max(0, Math.min(1, Number(value) || 0));
   }
 
   setInverted(value) {
@@ -596,6 +603,10 @@ export default class PaperCurtainEffect {
       this.curtain.setBackground(background, this.options.backgroundOpacity);
     }
     this._log('setColors', { color, background });
+  }
+
+  setGrainOpacity(value) {
+    this.curtain.setGrainOpacity(value);
   }
 
   setLoadProgress(value) {
