@@ -66,8 +66,6 @@ const DEFAULT_OPTIONS = {
   loaderColor: '#f5edcc',
   warmTint: 0.6,
   grainOpacity: 1.0,
-  debug: false,
-  debugLabel: 'BlackletterPaperCurtain',
 };
 
 const VERTEX_SHADER = /* glsl */ `
@@ -517,7 +515,6 @@ export default class PaperCurtainEffect {
     }
     window.__BLACKLETTER_LAST_PAPER_EFFECT__ = this;
 
-    this._log('created', { options: this.options, gsap: Boolean(window.gsap) });
   }
 
   // ─── setup ────────────────────────────────────────────────────────────
@@ -606,7 +603,6 @@ export default class PaperCurtainEffect {
       this.options.background = background;
       this.curtain.setBackground(background, this.options.backgroundOpacity);
     }
-    this._log('setColors', { color, background });
   }
 
   setGrainOpacity(value) {
@@ -637,8 +633,6 @@ export default class PaperCurtainEffect {
     this._prepareContainer();
     this.state.progress = 0;
     this._loaderStart = performance.now();
-    this._log('in()', { waitForLoad });
-
     if (waitForLoad) {
       this._pendingReveal = true;
       const onReady = () => {
@@ -667,7 +661,6 @@ export default class PaperCurtainEffect {
 
     this._prepareContainer();
     this._isExiting = true;
-    this._log('out()');
 
     if (this._isTheatre()) {
       this.state.progress = 0;
@@ -740,7 +733,6 @@ export default class PaperCurtainEffect {
           try {
             document.body.dispatchEvent(new Event('paper-curtain'));
           } catch (e) { /* ignore */ }
-          this._log('animation complete', { progress: this.state.progress });
         },
       });
       return this._tween;
@@ -765,9 +757,4 @@ export default class PaperCurtainEffect {
     return null;
   }
 
-  _log(message, data) {
-    if (!this.options.debug && !window.__BLACKLETTER_PAPER_DEBUG__) return;
-    // eslint-disable-next-line no-console
-    console.log(`[${this.options.debugLabel}] ${message}`, data || {});
-  }
 }
