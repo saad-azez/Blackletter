@@ -74,8 +74,8 @@ const VERTEX_SHADER = /* glsl */ `
 const FRAGMENT_SHADER = /* glsl */ `
   #define PI 3.1415926538
   #define NUM_OCTAVES 5
-  #define ANTE_END 0.12
-  #define TEAR_END 0.40
+  #define ANTE_END 0.04
+  #define TEAR_END 0.70
 
   precision highp float;
 
@@ -258,28 +258,43 @@ const FRAGMENT_SHADER = /* glsl */ `
         paper.rgb = paperLighting(paper.rgb, vUv);
         gl_FragColor = paper;
 
-        // Tear-crack rendering during the tear phase: a thin dark line at
-        // x≈0.5 propagating downward from y=1 to y=(1-tearT).
+        // Horizontal tear-crack along the seam at y≈0.5, extending from
+        // centre outward as tearT grows. Reads as a slow page-loading
+        // indicator before the halves snap apart.
         if (uProgress >= ANTE_END) {
-          float crackBaseX = 0.5;
-          // Slight noise wobble on the crack so it isn't dead straight.
-          float wobble = snoise(vec2(vUv.y * 14.0, 11.7)) * 0.004;
-          float crackX = crackBaseX + wobble;
-          float crackTop = 1.0 - pow(tearT, 0.6); // ease-in propagation
-          float onCrack = step(crackTop, vUv.y) * step(abs(vUv.x - crackX), 0.0018);
+          float crackBaseY = 0.5;
+          // Wobble along x so the crack isn't dead straight.
+          float wobbleY = snoise(vec2(vUv.x * 14.0, 11.7)) * 0.004;
+          float crackY = crackBaseY + wobbleY;
+
+          // Half-width grows with tearT — eased so the propagation slows
+          // toward the edges (gives the "loading-then-snap" feel).
+          float crackHalfW = pow(tearT, 0.7) * 0.5;
+          float distFromCenterX = abs(vUv.x - 0.5);
+          float onLine = step(abs(vUv.y - crackY), 0.0022);
+          float withinExtent = step(distFromCenterX, crackHalfW);
 
           // Dark crack line.
-          gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.02), onCrack);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.02), onLine * withinExtent);
 
-          // Hot stress glow at the propagating tip.
-          float tipY = crackTop;
-          float tipDist = length(vec2((vUv.x - crackX) * uAspect, vUv.y - tipY));
+          // Soft shadow band just under the line — sells depth.
+          float shadowMask = withinExtent
+            * smoothstep(0.012, 0.0, abs(vUv.y - crackY))
+            * 0.35;
+          gl_FragColor.rgb *= 1.0 - shadowMask * 0.4;
+
+          // Hot stress glow at both propagating tips (left + right).
+          float leftTipX  = 0.5 - crackHalfW;
+          float rightTipX = 0.5 + crackHalfW;
+          float leftDist  = length(vec2((vUv.x - leftTipX)  * uAspect, vUv.y - crackY));
+          float rightDist = length(vec2((vUv.x - rightTipX) * uAspect, vUv.y - crackY));
+          float tipDist   = min(leftDist, rightDist);
           float tipMask = smoothstep(0.06, 0.0, tipDist)
-                         * smoothstep(0.05, 0.25, tearT)
-                         * (1.0 - smoothstep(0.85, 1.0, tearT));
-          gl_FragColor.rgb += vec3(1.0, 0.78, 0.42) * tipMask * 0.55;
+                         * smoothstep(0.02, 0.18, tearT)
+                         * (1.0 - smoothstep(0.92, 1.0, tearT));
+          gl_FragColor.rgb += vec3(1.0, 0.78, 0.42) * tipMask * 0.65;
 
-          // Anticipation shudder — subtle horizontal jitter via noise tap.
+          // Tiny anticipation shudder before the tear breaks.
           float anteShake = sin(uTime * 30.0) * 0.0015 * smoothstep(0.4, 1.0, anteT);
           gl_FragColor.rgb *= 1.0 + anteShake;
         }
@@ -438,10 +453,7 @@ export default class PaperCurtainEffect {
     this.canvas = canvas;
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.state = { progress: 0, loadProgress: 0 };
-    this.canvasSize = {
-      width: canvas.clientWidth || window.innerWidth,
-      height: canvas.clientHeight || window.innerHeight,
-    };
+    this.canvasSize = this._measureCanvas();
 
     this._isExiting   = false;
     this._pendingReveal = false;
@@ -484,19 +496,27 @@ export default class PaperCurtainEffect {
     this.gl = this.renderer.gl;
   }
 
+  _measureCanvas() {
+    const rect = this.canvas.getBoundingClientRect();
+    let width  = rect.width  || this.canvas.clientWidth;
+    let height = rect.height || this.canvas.clientHeight;
+    // Canvas defaults to 300x150 when no CSS size is applied — treat that
+    // as "unsized" and fall back to the viewport so the effect always fills.
+    if (!width  || width  <= 1 || (width  === 300 && height === 150)) width  = window.innerWidth;
+    if (!height || height <= 1 || (rect.width === 300 && height === 150)) height = window.innerHeight;
+    return { width, height };
+  }
+
   _bindEvents() {
     this._onResize = (entries) => {
       const entry = entries && entries[0];
-      if (entry) {
+      if (entry && entry.contentRect.width > 1 && entry.contentRect.height > 1) {
         this.canvasSize = {
           width: entry.contentRect.width,
           height: entry.contentRect.height,
         };
       } else {
-        this.canvasSize = {
-          width: this.canvas.clientWidth || window.innerWidth,
-          height: this.canvas.clientHeight || window.innerHeight,
-        };
+        this.canvasSize = this._measureCanvas();
       }
       this._resize();
     };

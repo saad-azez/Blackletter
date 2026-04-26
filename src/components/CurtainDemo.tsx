@@ -40,9 +40,12 @@ const styles = {
     textTransform: 'uppercase' as const,
   },
   canvas: {
+    display: 'block' as const,
+    height: '100%',
     inset: 0,
     pointerEvents: 'none' as const,
     position: 'fixed' as const,
+    width: '100%',
     zIndex: 10,
   },
   controls: {
