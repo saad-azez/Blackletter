@@ -858,23 +858,36 @@ export default class PaperCurtainEffect {
 
     ctx.restore();
 
+    // Specular highlights: narrow warm peak at the crease apex with soft falloff
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
+    const warmth = clamp(Number(this.options.warmTint) || 0, 0, 1);
 
     for (let i = 0; i < foldCount - 1; i += 1) {
       const local = (i + 0.5) / foldCount;
       const x = side === 'left'
         ? spanStart + local * spanWidth
         : width - (spanStart + local * spanWidth);
-      const highlightWidth = width * 0.026;
-      const alpha = 0.08 * foldIntensity * openBoost;
-      const highlightGradient = ctx.createLinearGradient(x - highlightWidth, 0, x + highlightWidth, 0);
-      highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
-      highlightGradient.addColorStop(0.52, `rgba(255, 255, 255, ${alpha})`);
-      highlightGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      const wide = width * 0.034;
+      const peak = width * 0.004;
+      const baseA = 0.06 * foldIntensity * openBoost;
+      const peakA = 0.16 * foldIntensity * openBoost;
 
-      ctx.fillStyle = highlightGradient;
-      ctx.fillRect(x - highlightWidth, -height * 0.1, highlightWidth * 2, height * 1.2);
+      // Wide soft glow
+      const wideGrad = ctx.createLinearGradient(x - wide, 0, x + wide, 0);
+      wideGrad.addColorStop(0, 'rgba(255, 245, 220, 0)');
+      wideGrad.addColorStop(0.5, `rgba(${255}, ${245 - warmth * 8}, ${220 - warmth * 22}, ${baseA})`);
+      wideGrad.addColorStop(1, 'rgba(255, 245, 220, 0)');
+      ctx.fillStyle = wideGrad;
+      ctx.fillRect(x - wide, -height * 0.1, wide * 2, height * 1.2);
+
+      // Sharp narrow specular peak (the crease itself)
+      const peakGrad = ctx.createLinearGradient(x - peak, 0, x + peak, 0);
+      peakGrad.addColorStop(0, 'rgba(255, 250, 232, 0)');
+      peakGrad.addColorStop(0.5, `rgba(255, ${252 - warmth * 6}, ${238 - warmth * 16}, ${peakA})`);
+      peakGrad.addColorStop(1, 'rgba(255, 250, 232, 0)');
+      ctx.fillStyle = peakGrad;
+      ctx.fillRect(x - peak, -height * 0.1, peak * 2, height * 1.2);
     }
 
     ctx.restore();
@@ -1164,33 +1177,66 @@ export default class PaperCurtainEffect {
 
     if (crackPoints.length < 2) return;
 
-    // Dark crack shadow
+    // Helper to trace the crack path
+    const tracePath = (offsetX = 0) => {
+      ctx.beginPath();
+      crackPoints.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p.x + offsetX, p.y);
+        else ctx.lineTo(p.x + offsetX, p.y);
+      });
+    };
+
+    // Layer 1 — wide ambient shadow with real feathering (canvas shadowBlur)
     ctx.save();
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.72)';
-    ctx.lineWidth = Math.max(2.5, minSide * 0.0045);
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+    ctx.shadowBlur = Math.max(6, minSide * 0.012);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.lineWidth = Math.max(2.2, minSide * 0.0035);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    crackPoints.forEach((p, i) => {
-      if (i === 0) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
-    });
+    tracePath();
     ctx.stroke();
     ctx.restore();
 
-    // Bright highlight offset slightly right (torn-paper cross-section)
+    // Layer 2 — deep core shadow (the void inside the rip)
     ctx.save();
-    ctx.globalCompositeOperation = 'screen';
-    ctx.strokeStyle = 'rgba(255, 248, 228, 0.55)';
-    ctx.lineWidth = Math.max(0.8, minSide * 0.0011);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.92)';
+    ctx.lineWidth = Math.max(1.6, minSide * 0.0024);
     ctx.lineCap = 'round';
-    ctx.beginPath();
-    crackPoints.forEach((p, i) => {
-      if (i === 0) ctx.moveTo(p.x + 1.5, p.y);
-      else ctx.lineTo(p.x + 1.5, p.y);
-    });
+    ctx.lineJoin = 'round';
+    tracePath();
     ctx.stroke();
     ctx.restore();
+
+    // Layer 3 — warm cross-section highlight (the visible inside of the torn fibre)
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.strokeStyle = 'rgba(255, 232, 188, 0.62)';
+    ctx.lineWidth = Math.max(0.7, minSide * 0.0011);
+    ctx.lineCap = 'round';
+    tracePath(1.6);
+    ctx.stroke();
+    // Secondary thinner highlight further right for depth
+    ctx.strokeStyle = 'rgba(255, 248, 220, 0.32)';
+    ctx.lineWidth = Math.max(0.5, minSide * 0.0007);
+    tracePath(2.6);
+    ctx.stroke();
+    ctx.restore();
+
+    // Layer 4 — broad warm ambient bloom around the whole crack (heat/light leak)
+    if (tearT > 0.05) {
+      const bloomAlpha = smoothstep(0.05, 0.4, tearT) * (1 - smoothstep(0.85, 1, tearT));
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      ctx.shadowColor = `rgba(255, 210, 150, ${0.5 * bloomAlpha})`;
+      ctx.shadowBlur = Math.max(14, minSide * 0.025);
+      ctx.strokeStyle = `rgba(255, 220, 160, ${0.18 * bloomAlpha})`;
+      ctx.lineWidth = Math.max(0.5, minSide * 0.0008);
+      ctx.lineCap = 'round';
+      tracePath();
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Hot stress glow at the propagating tip
     if (tearT > 0.03 && tearT < 0.97) {
