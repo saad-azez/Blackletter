@@ -436,6 +436,10 @@ class PaperCurtain {
     this.uniforms.uGrainOpacity.value = Math.max(0, Math.min(1, Number(value) || 0));
   }
 
+  setShowLoader(value) {
+    this.uniforms.uShowLoader.value = value ? 1 : 0;
+  }
+
   setInverted(value) {
     this.uniforms.uInverted.value = Boolean(value);
   }
@@ -607,6 +611,10 @@ export default class PaperCurtainEffect {
 
   setGrainOpacity(value) {
     this.curtain.setGrainOpacity(value);
+  }
+
+  setShowLoader(value) {
+    this.curtain.setShowLoader(value);
   }
 
   setLoadProgress(value) {
