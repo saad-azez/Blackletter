@@ -45,12 +45,10 @@ const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7
 const cameraModes = ['Perspective', 'Orthographic'] as const;
 const defaultCastleModelUrl = new URL('../assets/Castle/Castle-Building/castle-building.glb', import.meta.url).href;
 const defaultTowerModelUrl = new URL('../assets/Castle/Tower/Tower.glb', import.meta.url).href;
-const defaultFloorModelUrl = new URL('../assets/Floor/Floor.glb', import.meta.url).href;
 const defaultSkyTextureUrl = new URL('../assets/Textures/vortex.jpeg', import.meta.url).href;
 
 useGLTF.preload(defaultCastleModelUrl, dracoDecoderPath);
 useGLTF.preload(defaultTowerModelUrl, dracoDecoderPath);
-useGLTF.preload(defaultFloorModelUrl, dracoDecoderPath);
 
 type CameraMode = (typeof cameraModes)[number];
 
@@ -133,7 +131,7 @@ interface CastleModelProps {
   castleTransform: CastleTransform;
   floorTransform: CastleFloorTransform;
   floorLight: FloorLightSettings;
-  floorModelUrl: string;
+  floorModelUrl?: string;
   lightsEnabled: boolean;
   modelScale: number;
   modelUrl: string;
@@ -141,6 +139,17 @@ interface CastleModelProps {
   pointerTarget: MutableRefObject<THREE.Vector2>;
   towerModelUrl: string;
   towerTransforms: TowerTransform[];
+}
+
+interface FloorSceneProps {
+  floorModelUrl: string;
+  floorTransform: CastleFloorTransform;
+  floorLight: FloorLightSettings;
+  layoutPositionScale: number;
+  lightsEnabled: boolean;
+  onFloorScreenRectChange: (screenRect: FloorScreenRect | null) => void;
+  preparedCastle: PreparedSceneResult;
+  responsiveCastleTransform: CastleTransform;
 }
 
 interface CastleSceneCameraProps {
@@ -544,7 +553,7 @@ export function CastleScene({
   const resolvedCastleModelUrl =
     toText(castleModelUrl).trim() || toText(modelUrl).trim() || defaultCastleModelUrl;
   const resolvedTowerModelUrl = toText(towerModelUrl).trim() || defaultTowerModelUrl;
-  const resolvedFloorModelUrl = toText(floorModelUrl).trim() || defaultFloorModelUrl;
+  const resolvedFloorModelUrl = toText(floorModelUrl).trim();
   const resolvedRocksImageUrl = toText(rocksImageUrl).trim();
   const resolvedSkyTextureUrl = toText(skyTextureUrl).trim() || defaultSkyTextureUrl;
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
@@ -611,7 +620,9 @@ export function CastleScene({
   useEffect(() => {
     useGLTF.preload(resolvedCastleModelUrl, dracoDecoderPath);
     useGLTF.preload(resolvedTowerModelUrl, dracoDecoderPath);
-    useGLTF.preload(resolvedFloorModelUrl, dracoDecoderPath);
+    if (resolvedFloorModelUrl) {
+      useGLTF.preload(resolvedFloorModelUrl, dracoDecoderPath);
+    }
   }, [resolvedCastleModelUrl, resolvedFloorModelUrl, resolvedTowerModelUrl]);
 
   useEffect(() => {
@@ -1483,7 +1494,6 @@ function CastleModel({
   const groupRef = useRef<THREE.Group>(null);
   const { camera, size } = useThree();
   const gltf = useGLTF(modelUrl, dracoDecoderPath);
-  const floorGltf = useGLTF(floorModelUrl, dracoDecoderPath);
   const towerGltf = useGLTF(towerModelUrl, dracoDecoderPath);
 
   const preparedCastle = useMemo(
@@ -1500,14 +1510,6 @@ function CastleModel({
   const preparedTower = useMemo(
     () => buildPreparedTowerScene(towerGltf.scene, preparedCastle.worldScale),
     [preparedCastle.worldScale, towerGltf.scene],
-  );
-  const preparedFloor = useMemo(
-    () => buildPreparedFloorScene(floorGltf.scene, preparedCastle.worldScale),
-    [floorGltf.scene, preparedCastle.worldScale],
-  );
-  const preparedFloorSurface = useMemo(
-    () => getFloorSurfaceFootprint(preparedFloor),
-    [preparedFloor],
   );
   const referenceWorldScale = useMemo(() => {
     const bounds = new THREE.Box3().setFromObject(gltf.scene);
@@ -1551,6 +1553,128 @@ function CastleModel({
       };
     });
   }, [layoutPositionScale, towerModelHeight, towerTransforms]);
+  const attachedTower = responsiveTowerTransforms[0];
+  const detachedTowers = responsiveTowerTransforms.slice(1);
+
+  useEffect(() => {
+    if (!groupRef.current) {
+      return;
+    }
+
+    groupRef.current.position.set(0, 0, 0);
+    groupRef.current.rotation.set(0, 0, 0);
+  }, [animationEnabled, preparedCastle.root, preparedTower]);
+
+  useFrame((_, delta) => {
+    if (!groupRef.current) {
+      return;
+    }
+
+    if (!animationEnabled) {
+      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, 0, 3.2, delta);
+      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, 0, 3.2, delta);
+      groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, 0, 3, delta);
+      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, 0, 3.4, delta);
+      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, 0, 3.4, delta);
+      groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, 0, 3.2, delta);
+      return;
+    }
+
+    const { x, y } = pointerTarget.current;
+
+    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.12, 3.2, delta);
+    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.06, 3.2, delta);
+    groupRef.current.position.z = THREE.MathUtils.damp(
+      groupRef.current.position.z,
+      -Math.abs(x) * 0.04 - Math.abs(y) * 0.03,
+      3,
+      delta,
+    );
+    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.06, 3.4, delta);
+    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.12, 3.4, delta);
+    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.03, 3.2, delta);
+  });
+
+  return (
+    <group ref={groupRef}>
+        {floorModelUrl ? (
+          <FloorScene
+            floorLight={floorLight}
+            floorModelUrl={floorModelUrl}
+            floorTransform={floorTransform}
+            layoutPositionScale={layoutPositionScale}
+            lightsEnabled={lightsEnabled}
+            onFloorScreenRectChange={onFloorScreenRectChange}
+            preparedCastle={preparedCastle}
+            responsiveCastleTransform={responsiveCastleTransform}
+          />
+        ) : null}
+        <group
+          position={[responsiveCastleTransform.x, responsiveCastleTransform.y, responsiveCastleTransform.z]}
+          rotation={[
+            THREE.MathUtils.degToRad(responsiveCastleTransform.rotationX),
+            THREE.MathUtils.degToRad(responsiveCastleTransform.rotationY),
+            THREE.MathUtils.degToRad(responsiveCastleTransform.rotationZ),
+          ]}
+          scale={[responsiveCastleTransform.scale, responsiveCastleTransform.scale, responsiveCastleTransform.scale]}
+        >
+          <primitive object={preparedCastle.root} />
+          {attachedTower?.visible ? (
+            <group
+              key="tower-1"
+              position={[attachedTower.x, attachedTower.y, attachedTower.z]}
+              rotation={[
+                THREE.MathUtils.degToRad(attachedTower.rotationX),
+                THREE.MathUtils.degToRad(attachedTower.rotationY),
+                THREE.MathUtils.degToRad(attachedTower.rotationZ),
+              ]}
+              scale={[attachedTower.scale, attachedTower.scale, attachedTower.scale]}
+            >
+              <Clone object={preparedTower} />
+            </group>
+          ) : null}
+        </group>
+        {detachedTowers.map((tower, index) =>
+          tower.visible ? (
+          <group
+            key={`tower-${index + 2}`}
+            position={[tower.x, tower.y, tower.z]}
+            rotation={[
+              THREE.MathUtils.degToRad(tower.rotationX),
+              THREE.MathUtils.degToRad(tower.rotationY),
+              THREE.MathUtils.degToRad(tower.rotationZ),
+            ]}
+            scale={[tower.scale, tower.scale, tower.scale]}
+          >
+            <Clone object={preparedTower} />
+          </group>
+          ) : null,
+        )}
+    </group>
+  );
+}
+
+function FloorScene({
+  floorModelUrl,
+  floorTransform,
+  floorLight,
+  layoutPositionScale,
+  lightsEnabled,
+  onFloorScreenRectChange,
+  preparedCastle,
+  responsiveCastleTransform,
+}: FloorSceneProps) {
+  const { camera, size } = useThree();
+  const floorGltf = useGLTF(floorModelUrl, dracoDecoderPath);
+
+  const preparedFloor = useMemo(
+    () => buildPreparedFloorScene(floorGltf.scene, preparedCastle.worldScale),
+    [floorGltf.scene, preparedCastle.worldScale],
+  );
+  const preparedFloorSurface = useMemo(
+    () => getFloorSurfaceFootprint(preparedFloor),
+    [preparedFloor],
+  );
   const responsiveFloorTransform = useMemo(
     () => ({
       ...floorTransform,
@@ -1558,9 +1682,6 @@ function CastleModel({
     }),
     [floorTransform, layoutPositionScale],
   );
-  const attachedTower = responsiveTowerTransforms[0];
-  const detachedTowers = responsiveTowerTransforms.slice(1);
-
   const floorAnchorBounds = useMemo(() => {
     const castleRoot = new THREE.Group();
 
@@ -1758,106 +1879,24 @@ function CastleModel({
     onFloorScreenRectChange(floorScreenRect);
   }, [floorScreenRect, onFloorScreenRectChange]);
 
-  useEffect(() => {
-    if (!groupRef.current) {
-      return;
-    }
-
-    groupRef.current.position.set(0, 0, 0);
-    groupRef.current.rotation.set(0, 0, 0);
-  }, [animationEnabled, preparedCastle.root, preparedFloor, preparedTower]);
-
-  useFrame((_, delta) => {
-    if (!groupRef.current) {
-      return;
-    }
-
-    if (!animationEnabled) {
-      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, 0, 3.2, delta);
-      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, 0, 3.2, delta);
-      groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, 0, 3, delta);
-      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, 0, 3.4, delta);
-      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, 0, 3.4, delta);
-      groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, 0, 3.2, delta);
-      return;
-    }
-
-    const { x, y } = pointerTarget.current;
-
-    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.12, 3.2, delta);
-    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.06, 3.2, delta);
-    groupRef.current.position.z = THREE.MathUtils.damp(
-      groupRef.current.position.z,
-      -Math.abs(x) * 0.04 - Math.abs(y) * 0.03,
-      3,
-      delta,
-    );
-    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.06, 3.4, delta);
-    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.12, 3.4, delta);
-    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.03, 3.2, delta);
-  });
-
   return (
-    <group ref={groupRef}>
-        <group
-          position={[finalFloorPosition.x, finalFloorPosition.y, finalFloorPosition.z]}
-          rotation={[
-            THREE.MathUtils.degToRad(responsiveFloorTransform.rotationX),
-            THREE.MathUtils.degToRad(responsiveFloorTransform.rotationY),
-            THREE.MathUtils.degToRad(responsiveFloorTransform.rotationZ),
-          ]}
-          scale={[floorScale.x, floorScale.y, floorScale.z]}
-        >
-          {responsiveFloorTransform.visible ? <primitive object={preparedFloor} /> : null}
-          {responsiveFloorTransform.visible && lightsEnabled ? (
-            <FloorTopLight
-              depth={floorLightSize.depth}
-              settings={floorLight}
-              width={floorLightSize.width}
-            />
-          ) : null}
-        </group>
-        <group
-          position={[responsiveCastleTransform.x, responsiveCastleTransform.y, responsiveCastleTransform.z]}
-          rotation={[
-            THREE.MathUtils.degToRad(responsiveCastleTransform.rotationX),
-            THREE.MathUtils.degToRad(responsiveCastleTransform.rotationY),
-            THREE.MathUtils.degToRad(responsiveCastleTransform.rotationZ),
-          ]}
-          scale={[responsiveCastleTransform.scale, responsiveCastleTransform.scale, responsiveCastleTransform.scale]}
-        >
-          <primitive object={preparedCastle.root} />
-          {attachedTower?.visible ? (
-            <group
-              key="tower-1"
-              position={[attachedTower.x, attachedTower.y, attachedTower.z]}
-              rotation={[
-                THREE.MathUtils.degToRad(attachedTower.rotationX),
-                THREE.MathUtils.degToRad(attachedTower.rotationY),
-                THREE.MathUtils.degToRad(attachedTower.rotationZ),
-              ]}
-              scale={[attachedTower.scale, attachedTower.scale, attachedTower.scale]}
-            >
-              <Clone object={preparedTower} />
-            </group>
-          ) : null}
-        </group>
-        {detachedTowers.map((tower, index) =>
-          tower.visible ? (
-          <group
-            key={`tower-${index + 2}`}
-            position={[tower.x, tower.y, tower.z]}
-            rotation={[
-              THREE.MathUtils.degToRad(tower.rotationX),
-              THREE.MathUtils.degToRad(tower.rotationY),
-              THREE.MathUtils.degToRad(tower.rotationZ),
-            ]}
-            scale={[tower.scale, tower.scale, tower.scale]}
-          >
-            <Clone object={preparedTower} />
-          </group>
-          ) : null,
-        )}
+    <group
+      position={[finalFloorPosition.x, finalFloorPosition.y, finalFloorPosition.z]}
+      rotation={[
+        THREE.MathUtils.degToRad(responsiveFloorTransform.rotationX),
+        THREE.MathUtils.degToRad(responsiveFloorTransform.rotationY),
+        THREE.MathUtils.degToRad(responsiveFloorTransform.rotationZ),
+      ]}
+      scale={[floorScale.x, floorScale.y, floorScale.z]}
+    >
+      {responsiveFloorTransform.visible ? <primitive object={preparedFloor} /> : null}
+      {responsiveFloorTransform.visible && lightsEnabled ? (
+        <FloorTopLight
+          depth={floorLightSize.depth}
+          settings={floorLight}
+          width={floorLightSize.width}
+        />
+      ) : null}
     </group>
   );
 }

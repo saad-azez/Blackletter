@@ -4,7 +4,23 @@
       "Bash(git -C d:/blackletter status)",
       "Bash(git -C d:/blackletter diff --stat)",
       "Bash(git -C d:/blackletter add src/components/CastleScene.config.ts src/components/CastleScene.tsx src/index.css)",
-      "Bash(git -C d:/blackletter commit -m ' *)"
+      "Bash(git -C d:/blackletter commit -m ' *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git rm *)",
+      "Bash(node --input-type=module -e \"import\\('./src/components/BlackletterPaperCurtain.mjs'\\).then\\(m => { const proto = m.default.prototype; ['drawVignette','drawFilmGrain','_buildGrainCanvases'].forEach\\(name => console.log\\(name, ':', typeof proto[name]\\)\\); }\\)\")",
+      "Bash(node --input-type=module -e \"import\\('./src/components/BlackletterPaperCurtain.mjs'\\).then\\(m => console.log\\('Module OK, methods:', Object.getOwnPropertyNames\\(m.default.prototype\\).length\\)\\)\")",
+      "Bash(npx vite *)",
+      "Bash(pkill -f \"vite\")",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:5173/curtain)",
+      "Bash(curl -s \"http://localhost:5173/src/components/BlackletterPaperCurtain.mjs\")",
+      "Bash(grep -v \"^[[:space:]]*//\")",
+      "Bash(node --input-type=module -e \"import\\('./src/components/BlackletterPaperCurtain.mjs'\\).then\\(\\(\\) => console.log\\('Module parses OK'\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:5173/curtain)",
+      "Bash(npx webflow *)",
+      "Bash(git commit *)"
     ]
   }
 }
