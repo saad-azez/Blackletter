@@ -21,6 +21,7 @@ import { DebugOrbitControls } from './DebugOrbitControls';
 import {
   chessAmbientIntensityControl,
   chessCameraAxisControls,
+  chessCameraFovControl,
   chessDirectionalIntensityControl,
   chessFloorMeshTransformDefaults,
   chessFloorLightAxisControls,
@@ -61,6 +62,9 @@ const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7
 const cameraModes = ['Perspective', 'Orthographic'] as const;
 const defaultFloorModelUrl = new URL('../assets/Floor/Floor.glb', import.meta.url).href;
 const defaultChessModelUrl = new URL('../assets/Chess/chees.glb', import.meta.url).href;
+const compactChessBreakpoint = 1024;
+const mobileChessBreakpoint = 640;
+const mobileVisiblePieceIndexes = new Set([1, 4, 5]);
 
 useGLTF.preload(defaultFloorModelUrl, dracoDecoderPath);
 useGLTF.preload(defaultChessModelUrl, dracoDecoderPath);
@@ -69,10 +73,13 @@ type CameraMode = (typeof cameraModes)[number];
 
 export interface ChessSceneProps {
   animationEnabled?: boolean;
+  backgroundImageUrl?: string;
+  cameraFov?: number;
   cameraX?: number;
   cameraY?: number;
   cameraZ?: number;
   chessModelUrl?: string;
+  fillParent?: boolean;
   floorModelUrl?: string;
   modelScale?: number;
   showGui?: boolean;
@@ -81,6 +88,7 @@ export interface ChessSceneProps {
 interface GuiState {
   animationEnabled: boolean;
   board: SceneTransform;
+  cameraFov: number;
   cameraMode: CameraMode;
   orbitEnabled: boolean;
   cameraX: number;
@@ -146,6 +154,7 @@ interface SceneLightsGuiControllers {
 interface GuiControllers {
   animationEnabled?: ReturnType<GUI['add']>;
   board: TransformGuiControllers;
+  cameraFov?: ReturnType<GUI['add']>;
   cameraMode?: ReturnType<GUI['add']>;
   orbitEnabled?: ReturnType<GUI['add']>;
   cameraX?: ReturnType<GUI['add']>;
@@ -166,12 +175,14 @@ interface ChessBoardSceneProps {
   floorModelUrl: string;
   floorTransform: SceneTransform;
   lightsEnabled: boolean;
+  cameraFov: number;
   modelScale: number;
   pieceTransforms: ChessPieceTransform[];
   pointerTarget: MutableRefObject<THREE.Vector2>;
 }
 
 interface ChessSceneCameraProps {
+  fov: number;
   mode: CameraMode;
   position: SceneCameraPosition;
   target: SceneCameraPosition;
@@ -186,6 +197,8 @@ interface ChessLightingProps {
 interface PreparedSceneResult {
   footprintDepth: number;
   footprintWidth: number;
+  layoutFootprintDepth: number;
+  layoutFootprintWidth: number;
   root: THREE.Group;
 }
 
@@ -227,6 +240,10 @@ function clampCameraAxis(axis: keyof SceneCameraPosition, value: number) {
   const control = chessCameraAxisControls[axis];
 
   return THREE.MathUtils.clamp(value, control.min, control.max);
+}
+
+function clampCameraFov(value: number) {
+  return THREE.MathUtils.clamp(value, chessCameraFovControl.min, chessCameraFovControl.max);
 }
 
 function clampScenePositionAxis(axis: keyof SceneCameraPosition, value: number) {
@@ -389,12 +406,16 @@ function createSunBeamTexture() {
   return texture;
 }
 
-function getOrthographicZoom(position: SceneCameraPosition, target: SceneCameraPosition, viewportHeight: number) {
+function getOrthographicZoom(
+  position: SceneCameraPosition,
+  target: SceneCameraPosition,
+  viewportHeight: number,
+  fov: number,
+) {
   const cameraVector = new THREE.Vector3(position.x, position.y, position.z);
   const targetVector = new THREE.Vector3(target.x, target.y, target.z);
   const cameraDistance = Math.max(cameraVector.distanceTo(targetVector), 0.5);
-  const visibleHeight =
-    2 * cameraDistance * Math.tan(THREE.MathUtils.degToRad(chessPerspectiveCamera.fov / 2));
+  const visibleHeight = 2 * cameraDistance * Math.tan(THREE.MathUtils.degToRad(fov / 2));
 
   return THREE.MathUtils.clamp(viewportHeight / Math.max(visibleHeight, 0.01), 10, 500);
 }
@@ -414,13 +435,35 @@ function getViewportAtDistance(distance: number, fov: number, aspectRatio: numbe
   };
 }
 
+function getCompactLayoutAmount(width: number, aspectRatio: number) {
+  if (width <= 0 || width >= compactChessBreakpoint) {
+    return 0;
+  }
+
+  return THREE.MathUtils.clamp((1.05 - aspectRatio) / 0.4, 0, 1);
+}
+
+function getFocusedPieceTargetHeight(
+  floorFootprintWidth: number,
+  floorFootprintDepth: number,
+  aspectRatio: number,
+  cameraFov: number,
+  floorScale: number,
+  compactLayoutAmount: number,
+) {
+  const baseHeight = Math.max(Math.min(floorFootprintWidth, floorFootprintDepth) * 0.18, 0.25);
+  const viewport = getViewportAtDistance(chessPerspectiveCamera.position.z, cameraFov, aspectRatio);
+  const focusHeight = (viewport.height * 0.36) / Math.max(floorScale, 0.001);
+
+  return THREE.MathUtils.lerp(baseHeight, focusHeight, compactLayoutAmount);
+}
+
 function getWorldScaleForSceneSize(
   size: THREE.Vector3,
-  camera: THREE.Camera,
   aspectRatio: number,
   modelScale: number,
+  fov: number,
 ) {
-  const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : chessPerspectiveCamera.fov;
   const viewport = getViewportAtDistance(chessPerspectiveCamera.position.z, fov, aspectRatio);
 
   return (
@@ -431,6 +474,10 @@ function getWorldScaleForSceneSize(
     modelScale *
     0.8
   );
+}
+
+function getCompactFloorScale(compactLayoutAmount: number) {
+  return THREE.MathUtils.lerp(1, 2.25, compactLayoutAmount);
 }
 
 function prepareSceneObject(scene: THREE.Object3D, castShadow: boolean, receiveShadow: boolean) {
@@ -461,15 +508,22 @@ function prepareSceneObject(scene: THREE.Object3D, castShadow: boolean, receiveS
 
 function buildPreparedFloorScene(
   scene: THREE.Object3D,
-  camera: THREE.Camera,
   aspectRatio: number,
   modelScale: number,
+  cameraFov: number,
+  compactLayoutAmount: number,
 ): PreparedSceneResult {
   const root = prepareSceneObject(scene, false, true);
   const bounds = new THREE.Box3().setFromObject(root);
   const center = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
-  const worldScale = getWorldScaleForSceneSize(size, camera, aspectRatio, modelScale);
+  const layoutWorldScale = getWorldScaleForSceneSize(
+    size,
+    aspectRatio,
+    modelScale,
+    cameraFov,
+  );
+  const worldScale = layoutWorldScale * getCompactFloorScale(compactLayoutAmount);
   const topY = bounds.max.y;
 
   root.scale.setScalar(worldScale);
@@ -482,20 +536,20 @@ function buildPreparedFloorScene(
   return {
     footprintDepth: scaledSize.z,
     footprintWidth: scaledSize.x,
+    layoutFootprintDepth: size.z * layoutWorldScale,
+    layoutFootprintWidth: size.x * layoutWorldScale,
     root,
   };
 }
 
 function buildPreparedPieceScene(
   scene: THREE.Object3D,
-  floorFootprintWidth: number,
-  floorFootprintDepth: number,
+  targetHeight: number,
 ): PreparedSceneResult {
   const root = prepareSceneObject(scene, true, true);
   const bounds = new THREE.Box3().setFromObject(root);
   const center = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
-  const targetHeight = Math.max(Math.min(floorFootprintWidth, floorFootprintDepth) * 0.18, 0.25);
   const worldScale = targetHeight / Math.max(size.y, 0.001);
   const baseY = bounds.min.y;
 
@@ -509,16 +563,21 @@ function buildPreparedPieceScene(
   return {
     footprintDepth: scaledSize.z,
     footprintWidth: scaledSize.x,
+    layoutFootprintDepth: scaledSize.z,
+    layoutFootprintWidth: scaledSize.x,
     root,
   };
 }
 
 export function ChessScene({
   animationEnabled = true,
+  backgroundImageUrl = '',
+  cameraFov = chessPerspectiveCamera.fov,
   cameraX = chessPerspectiveCamera.position.x,
   cameraY = chessPerspectiveCamera.position.y,
   cameraZ = chessPerspectiveCamera.position.z,
   chessModelUrl = '',
+  fillParent = false,
   floorModelUrl = '',
   modelScale = 1,
   showGui = false,
@@ -544,11 +603,15 @@ export function ChessScene({
   });
   const resolvedFloorModelUrl = toText(floorModelUrl).trim() || defaultFloorModelUrl;
   const resolvedChessModelUrl = toText(chessModelUrl).trim() || defaultChessModelUrl;
+  const resolvedBackgroundImageUrl = toText(backgroundImageUrl).trim() || battlefieldTextureUrl;
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
     x: clampCameraAxis('x', toNumber(cameraX, chessPerspectiveCamera.position.x)),
     y: clampCameraAxis('y', toNumber(cameraY, chessPerspectiveCamera.position.y)),
     z: clampCameraAxis('z', toNumber(cameraZ, chessPerspectiveCamera.position.z)),
   });
+  const [cameraFovValue, setCameraFovValue] = useState(() =>
+    clampCameraFov(toNumber(cameraFov, chessPerspectiveCamera.fov)),
+  );
   const [cameraMode, setCameraMode] = useState<CameraMode>('Perspective');
   const [orbitEnabled, setOrbitEnabled] = useState(false);
   const [animationActive, setAnimationActive] = useState(animationEnabled);
@@ -576,7 +639,7 @@ export function ChessScene({
   const defaultCameraTarget = useMemo<SceneCameraPosition>(
     () => ({
       x: floorTransform.x,
-      y: floorTransform.y + floorTransform.scale * 0.45,
+      y: floorTransform.y + floorTransform.scale * 0.95,
       z: floorTransform.z,
     }),
     [floorTransform],
@@ -594,6 +657,10 @@ export function ChessScene({
       z: clampCameraAxis('z', toNumber(cameraZ, chessPerspectiveCamera.position.z)),
     });
   }, [cameraX, cameraY, cameraZ]);
+
+  useEffect(() => {
+    setCameraFovValue(clampCameraFov(toNumber(cameraFov, chessPerspectiveCamera.fov)));
+  }, [cameraFov]);
 
   useEffect(() => {
     setAnimationActive(animationEnabled);
@@ -684,6 +751,7 @@ export function ChessScene({
     const guiState: GuiState = {
       animationEnabled: animationActive,
       board: normalizeFloorTransform({ ...floorTransform }),
+      cameraFov: cameraFovValue,
       cameraMode,
       orbitEnabled,
       cameraX: cameraPosition.x,
@@ -782,6 +850,19 @@ export function ChessScene({
         }
       });
 
+    guiControllersRef.current.cameraFov = cameraFolder
+      .add(
+        guiState,
+        'cameraFov',
+        chessCameraFovControl.min,
+        chessCameraFovControl.max,
+        chessCameraFovControl.step,
+      )
+      .name(chessCameraFovControl.label)
+      .onChange((value: number) => {
+        setCameraFovValue(clampCameraFov(Number(value)));
+      });
+
     guiControllersRef.current.orbitEnabled = cameraFolder
       .add(guiState, 'orbitEnabled')
       .name('Orbit Controls')
@@ -842,6 +923,7 @@ export function ChessScene({
         {
           reset: () => {
             setCameraPosition({ ...chessPerspectiveCamera.position });
+            setCameraFovValue(chessPerspectiveCamera.fov);
             setCameraMode('Perspective');
             setOrbitEnabled(true);
             setCameraTarget(defaultCameraTarget);
@@ -1458,6 +1540,7 @@ export function ChessScene({
 
     guiState.animationEnabled = animationActive;
     Object.assign(guiState.board, normalizeFloorTransform(floorTransform));
+    guiState.cameraFov = cameraFovValue;
     guiState.cameraMode = cameraMode;
     guiState.orbitEnabled = orbitEnabled;
     guiState.cameraX = cameraPosition.x;
@@ -1483,6 +1566,7 @@ export function ChessScene({
     });
 
     guiControllersRef.current.animationEnabled?.updateDisplay();
+    guiControllersRef.current.cameraFov?.updateDisplay();
     guiControllersRef.current.cameraMode?.updateDisplay();
     guiControllersRef.current.orbitEnabled?.updateDisplay();
     guiControllersRef.current.cameraX?.updateDisplay();
@@ -1553,6 +1637,7 @@ export function ChessScene({
     });
   }, [
     animationActive,
+    cameraFovValue,
     cameraMode,
     cameraPosition,
     floorLight,
@@ -1569,10 +1654,15 @@ export function ChessScene({
       className="chess-scene-viewport"
       ref={sectionRef}
       style={{
-        backgroundImage: `radial-gradient(circle at 50% 25%, rgba(255, 246, 230, 0.26), transparent 44%), linear-gradient(180deg, rgba(31, 24, 21, 0.58) 0%, rgba(13, 11, 10, 0.82) 100%), url(${battlefieldTextureUrl})`,
+        backgroundImage: `radial-gradient(circle at 50% 25%, rgba(255, 246, 230, 0.26), transparent 44%), linear-gradient(180deg, rgba(31, 24, 21, 0.58) 0%, rgba(13, 11, 10, 0.82) 100%), url(${resolvedBackgroundImageUrl})`,
         backgroundPosition: 'center, center, center',
         backgroundRepeat: 'no-repeat, no-repeat, no-repeat',
         backgroundSize: 'auto, auto, cover',
+        height: fillParent ? '100%' : undefined,
+        minHeight: fillParent ? 0 : undefined,
+        overflow: 'hidden',
+        position: 'relative',
+        width: '100%',
       }}
     >
       <Canvas
@@ -1585,9 +1675,14 @@ export function ChessScene({
           gl.toneMappingExposure = 1.12;
         }}
         shadows
-        style={{ position: 'absolute', inset: 0 }}
+        style={{ position: 'absolute', inset: 0, zIndex: 1 }}
       >
-        <ChessSceneCamera mode={cameraMode} position={cameraPosition} target={cameraTarget} />
+        <ChessSceneCamera
+          fov={cameraFovValue}
+          mode={cameraMode}
+          position={cameraPosition}
+          target={cameraTarget}
+        />
         {showGui ? (
           <DebugOrbitControls
             enabled={orbitEnabled}
@@ -1613,6 +1708,7 @@ export function ChessScene({
           floorModelUrl={resolvedFloorModelUrl}
           floorTransform={floorTransform}
           lightsEnabled={lightsEnabled}
+          cameraFov={cameraFovValue}
           modelScale={modelScale}
           pieceTransforms={pieceTransforms}
           pointerTarget={pointerTarget}
@@ -1813,6 +1909,7 @@ function SunRayBeams({ backSpotPosition, floorTransform }: { backSpotPosition: {
 
 function ChessBoardScene({
   animationEnabled,
+  cameraFov,
   chessModelUrl,
   floorLight,
   floorMeshTransform,
@@ -1824,37 +1921,76 @@ function ChessBoardScene({
   pointerTarget,
 }: ChessBoardSceneProps) {
   const groupRef = useRef<THREE.Group>(null);
-  const { camera, size } = useThree();
+  const { size } = useThree();
   const floorGltf = useGLTF(floorModelUrl, dracoDecoderPath);
   const chessGltf = useGLTF(chessModelUrl, dracoDecoderPath);
+  const aspectRatio = size.height > 0 ? size.width / size.height : 1;
+  const compactLayoutAmount = getCompactLayoutAmount(size.width, aspectRatio);
+  const isMobileLayout = size.width > 0 && size.width < mobileChessBreakpoint;
+  const displayFloorTransform = useMemo(
+    () => ({
+      ...floorTransform,
+      y: floorTransform.y - compactLayoutAmount * 0.42,
+      z: floorTransform.z + compactLayoutAmount * 1.75,
+    }),
+    [compactLayoutAmount, floorTransform],
+  );
 
   const preparedFloor = useMemo(
     () =>
       buildPreparedFloorScene(
         floorGltf.scene,
-        camera,
-        size.height > 0 ? size.width / size.height : 1,
+        aspectRatio,
         modelScale,
+        cameraFov,
+        compactLayoutAmount,
       ),
-    [camera, floorGltf.scene, modelScale, size.height, size.width],
+    [aspectRatio, cameraFov, compactLayoutAmount, floorGltf.scene, modelScale],
+  );
+  const pieceTargetHeight = useMemo(
+    () =>
+      getFocusedPieceTargetHeight(
+        preparedFloor.footprintWidth,
+        preparedFloor.footprintDepth,
+        aspectRatio,
+        cameraFov,
+        displayFloorTransform.scale,
+        0,
+      ),
+    [
+      aspectRatio,
+      cameraFov,
+      displayFloorTransform.scale,
+      preparedFloor.footprintDepth,
+      preparedFloor.footprintWidth,
+    ],
   );
   const preparedPiece = useMemo(
     () =>
       buildPreparedPieceScene(
         chessGltf.scene,
-        preparedFloor.footprintWidth,
-        preparedFloor.footprintDepth,
+        pieceTargetHeight,
       ),
-    [chessGltf.scene, preparedFloor.footprintDepth, preparedFloor.footprintWidth],
+    [chessGltf.scene, pieceTargetHeight],
   );
   const piecePositions = useMemo(
-    () =>
-      pieceTransforms.map((piece) => ({
+    () => {
+      const visiblePieces = pieceTransforms
+        .map((piece, index) => ({ index, piece }))
+        .filter(({ index, piece }) => piece.visible && (!isMobileLayout || mobileVisiblePieceIndexes.has(index)));
+
+      return visiblePieces.map(({ index, piece }) => ({
         ...piece,
         x: piece.x * preparedFloor.footprintWidth * 0.5,
-        z: piece.z * preparedFloor.footprintDepth * 0.5,
-      })),
-    [pieceTransforms, preparedFloor.footprintDepth, preparedFloor.footprintWidth],
+        z: (isMobileLayout && index === 1 ? 0.1 : piece.z) * preparedFloor.footprintDepth * 0.5,
+      }));
+    },
+    [
+      isMobileLayout,
+      pieceTransforms,
+      preparedFloor.footprintDepth,
+      preparedFloor.footprintWidth,
+    ],
   );
   const floorLightSize = useMemo(
     () => ({
@@ -1865,16 +2001,23 @@ function ChessBoardScene({
   );
   const resolvedFloorTransform = useMemo(
     () => ({
-      rotationX: floorTransform.rotationX + floorMeshTransform.rotationX,
-      rotationY: floorTransform.rotationY + floorMeshTransform.rotationY,
-      rotationZ: floorTransform.rotationZ + floorMeshTransform.rotationZ,
-      scale: floorTransform.scale * floorMeshTransform.scale,
+      rotationX: displayFloorTransform.rotationX + floorMeshTransform.rotationX,
+      rotationY: displayFloorTransform.rotationY + floorMeshTransform.rotationY,
+      rotationZ: displayFloorTransform.rotationZ + floorMeshTransform.rotationZ,
+      scale: displayFloorTransform.scale * floorMeshTransform.scale,
       visible: floorMeshTransform.visible,
-      x: floorTransform.x + floorMeshTransform.x,
-      y: floorTransform.y + floorMeshTransform.y,
-      z: floorTransform.z + floorMeshTransform.z,
+      x: displayFloorTransform.x + floorMeshTransform.x,
+      y: displayFloorTransform.y + floorMeshTransform.y,
+      z: displayFloorTransform.z + floorMeshTransform.z,
     }),
     [
+      displayFloorTransform.rotationX,
+      displayFloorTransform.rotationY,
+      displayFloorTransform.rotationZ,
+      displayFloorTransform.scale,
+      displayFloorTransform.x,
+      displayFloorTransform.y,
+      displayFloorTransform.z,
       floorMeshTransform.rotationX,
       floorMeshTransform.rotationY,
       floorMeshTransform.rotationZ,
@@ -1883,13 +2026,6 @@ function ChessBoardScene({
       floorMeshTransform.x,
       floorMeshTransform.y,
       floorMeshTransform.z,
-      floorTransform.rotationX,
-      floorTransform.rotationY,
-      floorTransform.rotationZ,
-      floorTransform.scale,
-      floorTransform.x,
-      floorTransform.y,
-      floorTransform.z,
     ],
   );
 
@@ -1955,42 +2091,40 @@ function ChessBoardScene({
         </group>
       ) : null}
       <group
-        position={[floorTransform.x, floorTransform.y, floorTransform.z]}
+        position={[displayFloorTransform.x, displayFloorTransform.y, displayFloorTransform.z]}
         rotation={[
-          THREE.MathUtils.degToRad(floorTransform.rotationX),
-          THREE.MathUtils.degToRad(floorTransform.rotationY),
-          THREE.MathUtils.degToRad(floorTransform.rotationZ),
+          THREE.MathUtils.degToRad(displayFloorTransform.rotationX),
+          THREE.MathUtils.degToRad(displayFloorTransform.rotationY),
+          THREE.MathUtils.degToRad(displayFloorTransform.rotationZ),
         ]}
-        scale={[floorTransform.scale, floorTransform.scale, floorTransform.scale]}
+        scale={[displayFloorTransform.scale, displayFloorTransform.scale, displayFloorTransform.scale]}
       >
-        {piecePositions.map((piece, index) =>
-          piece.visible ? (
-            <group
-              key={`piece-${index + 1}`}
-              position={[piece.x, piece.y, piece.z]}
-              rotation={[
-                THREE.MathUtils.degToRad(piece.rotationX),
-                THREE.MathUtils.degToRad(piece.rotationY),
-                THREE.MathUtils.degToRad(piece.rotationZ),
-              ]}
-              scale={[piece.scale, piece.scale, piece.scale]}
-            >
-              {index === 0 ? (
-                <primitive object={preparedPiece.root} />
-              ) : (
-                <Clone object={preparedPiece.root} />
-              )}
-            </group>
-          ) : null,
-        )}
+        {piecePositions.map((piece, index) => (
+          <group
+            key={`piece-${index + 1}`}
+            position={[piece.x, piece.y, piece.z]}
+            rotation={[
+              THREE.MathUtils.degToRad(piece.rotationX),
+              THREE.MathUtils.degToRad(piece.rotationY),
+              THREE.MathUtils.degToRad(piece.rotationZ),
+            ]}
+            scale={[piece.scale, piece.scale, piece.scale]}
+          >
+            {index === 0 ? (
+              <primitive object={preparedPiece.root} />
+            ) : (
+              <Clone object={preparedPiece.root} />
+            )}
+          </group>
+        ))}
       </group>
     </group>
   );
 }
 
-function ChessSceneCamera({ mode, position, target }: ChessSceneCameraProps) {
+function ChessSceneCamera({ fov, mode, position, target }: ChessSceneCameraProps) {
   const { size } = useThree();
-  const orthographicZoom = getOrthographicZoom(position, target, size.height);
+  const orthographicZoom = getOrthographicZoom(position, target, size.height, fov);
   const cameraPosition: [number, number, number] = [position.x, position.y, position.z];
   const orthographicCameraRef = useRef<THREE.OrthographicCamera>(null);
   const perspectiveCameraRef = useRef<THREE.PerspectiveCamera>(null);
@@ -2006,10 +2140,16 @@ function ChessSceneCamera({ mode, position, target }: ChessSceneCameraProps) {
     camera.lookAt(target.x, target.y, target.z);
     camera.updateMatrixWorld();
 
-    if (camera instanceof THREE.OrthographicCamera || camera instanceof THREE.PerspectiveCamera) {
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.fov = fov;
       camera.updateProjectionMatrix();
     }
-  }, [mode, orthographicZoom, position.x, position.y, position.z, target.x, target.y, target.z]);
+
+    if (camera instanceof THREE.OrthographicCamera) {
+      camera.zoom = orthographicZoom;
+      camera.updateProjectionMatrix();
+    }
+  }, [fov, mode, orthographicZoom, position.x, position.y, position.z, target.x, target.y, target.z]);
 
   if (mode === 'Orthographic') {
     return (
@@ -2028,7 +2168,7 @@ function ChessSceneCamera({ mode, position, target }: ChessSceneCameraProps) {
     <PerspectiveCamera
       ref={perspectiveCameraRef}
       far={1000}
-      fov={chessPerspectiveCamera.fov}
+      fov={fov}
       makeDefault
       near={0.1}
       position={cameraPosition}

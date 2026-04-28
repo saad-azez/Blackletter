@@ -28,13 +28,13 @@ export const chessPerspectiveCamera = {
   fov: 38,
   lookAt: {
     x: 0,
-    y: 0.45,
+    y: -0.08,
     z: 0,
   },
   position: {
     x: 0,
-    y: 1.8,
-    z: 9.2,
+    y: 0.85,
+    z: 8.9,
   },
 } as const satisfies {
   fov: number;
@@ -71,14 +71,26 @@ export const chessCameraAxisControls = {
   }
 >;
 
+export const chessCameraFovControl = {
+  label: 'Camera FOV',
+  max: 90,
+  min: 18,
+  step: 1,
+} as const satisfies {
+  label: string;
+  max: number;
+  min: number;
+  step: number;
+};
+
 export const chessFloorTransformDefaults = {
   rotationX: 0,
   rotationY: 0,
   rotationZ: 0,
   scale: 1.5,
   x: 0,
-  y: -1.4,
-  z: 0,
+  y: -1.55,
+  z: 0.85,
 } as const satisfies SceneTransform;
 
 export const chessFloorMeshTransformDefaults = {
@@ -109,9 +121,29 @@ export const chessPieceDefaults = [
     rotationZ: 0,
     scale: 1,
     visible: true,
-    x: -0.54,
+    x: -0.6,
     y: 0.02,
-    z: -0.24,
+    z: -0.45,
+  },
+  {
+    rotationX: 0,
+    rotationY: -131,
+    rotationZ: 0,
+    scale: 1,
+    visible: true,
+    x: -0.01,
+    y: 0.02,
+    z: -0.45,
+  },
+  {
+    rotationX: 0,
+    rotationY: -135,
+    rotationZ: 0,
+    scale: 1,
+    visible: true,
+    x: 0.6,
+    y: 0.02,
+    z: -0.45,
   },
   {
     rotationX: 0,
@@ -119,9 +151,9 @@ export const chessPieceDefaults = [
     rotationZ: 0,
     scale: 1,
     visible: true,
-    x: -0.18,
+    x: -0.5,
     y: 0.02,
-    z: -0.24,
+    z: 0.25,
   },
   {
     rotationX: 0,
@@ -129,9 +161,19 @@ export const chessPieceDefaults = [
     rotationZ: 0,
     scale: 1,
     visible: true,
-    x: 0.18,
+    x: -0.26,
     y: 0.02,
-    z: -0.24,
+    z: -0.15,
+  },
+  {
+    rotationX: 0,
+    rotationY: -135,
+    rotationZ: 0,
+    scale: 1,
+    visible: true,
+    x: 0.23,
+    y: 0.02,
+    z: -0.15,
   },
   {
     rotationX: 0,
@@ -139,37 +181,7 @@ export const chessPieceDefaults = [
     rotationZ: 0,
     scale: 1,
     visible: true,
-    x: 0.54,
-    y: 0.02,
-    z: -0.24,
-  },
-  {
-    rotationX: 0,
-    rotationY: -120,
-    rotationZ: 0,
-    scale: 1,
-    visible: true,
-    x: -0.54,
-    y: 0.02,
-    z: 0.24,
-  },
-  {
-    rotationX: 0,
-    rotationY: -120,
-    rotationZ: 0,
-    scale: 1,
-    visible: true,
-    x: -0.18,
-    y: 0.02,
-    z: 0.24,
-  },
-  {
-    rotationX: 0,
-    rotationY: -120,
-    rotationZ: 0,
-    scale: 1,
-    visible: true,
-    x: 0.18,
+    x: 0.5,
     y: 0.02,
     z: 0.24,
   },
