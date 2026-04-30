@@ -202,6 +202,93 @@ interface PreparedSceneResult {
   root: THREE.Group;
 }
 
+interface SceneRenderSize {
+  height: number;
+  width: number;
+}
+
+function getComposedParent(element: Element | null): Element | null {
+  if (!element) {
+    return null;
+  }
+
+  if (element.parentElement) {
+    return element.parentElement;
+  }
+
+  const root = element.getRootNode();
+
+  return root instanceof ShadowRoot ? root.host : null;
+}
+
+function findComposedClosest(element: Element | null, selector: string) {
+  let current: Element | null = element;
+
+  while (current) {
+    if (current.matches(selector)) {
+      return current;
+    }
+
+    current = getComposedParent(current);
+  }
+
+  return null;
+}
+
+function getShadowHostElement(element: Element | null) {
+  if (!element) {
+    return null;
+  }
+
+  const root = element.getRootNode();
+
+  return root instanceof ShadowRoot && root.host instanceof HTMLElement ? root.host : null;
+}
+
+function measureSceneRenderSize(element: HTMLElement | null): SceneRenderSize | null {
+  if (!element) {
+    return null;
+  }
+
+  const rect = element.getBoundingClientRect();
+  const width = Math.round(element.offsetWidth || element.clientWidth || rect.width);
+  const height = Math.round(element.offsetHeight || element.clientHeight || rect.height);
+
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { height, width };
+}
+
+function measureSceneTargetSize(element: HTMLElement | null, fillParent: boolean): SceneRenderSize | null {
+  if (!element) {
+    return null;
+  }
+
+  const frame = fillParent ? findComposedClosest(element, '.frame') : null;
+
+  if (frame instanceof HTMLElement) {
+    const frameSize = measureSceneRenderSize(frame);
+
+    if (frameSize) {
+      return frameSize;
+    }
+  }
+
+  const host = fillParent ? getShadowHostElement(element) : null;
+
+  if (host) {
+    const hostSize = measureSceneRenderSize(host);
+
+    if (hostSize) {
+      return hostSize;
+    }
+  }
+
+  return measureSceneRenderSize(element);
+}
+
 function toText(value: unknown) {
   if (typeof value === 'string') {
     return value;
@@ -604,6 +691,7 @@ export function ChessScene({
   const resolvedFloorModelUrl = toText(floorModelUrl).trim() || defaultFloorModelUrl;
   const resolvedChessModelUrl = toText(chessModelUrl).trim() || defaultChessModelUrl;
   const resolvedBackgroundImageUrl = toText(backgroundImageUrl).trim() || battlefieldTextureUrl;
+  const [renderSize, setRenderSize] = useState<SceneRenderSize | null>(null);
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
     x: clampCameraAxis('x', toNumber(cameraX, chessPerspectiveCamera.position.x)),
     y: clampCameraAxis('y', toNumber(cameraY, chessPerspectiveCamera.position.y)),
@@ -649,6 +737,143 @@ export function ChessScene({
     y: chessPerspectiveCamera.lookAt.y,
     z: chessPerspectiveCamera.lookAt.z,
   }));
+
+  useLayoutEffect(() => {
+    if (!fillParent) {
+      return undefined;
+    }
+
+    const element = sectionRef.current;
+    const host = getShadowHostElement(element);
+    const frame = findComposedClosest(element, '.frame');
+
+    if (!host) {
+      return undefined;
+    }
+
+    const hostPreviousStyle = {
+      display: host.style.display,
+      height: host.style.height,
+      inset: host.style.inset,
+      maxHeight: host.style.maxHeight,
+      maxWidth: host.style.maxWidth,
+      minHeight: host.style.minHeight,
+      minWidth: host.style.minWidth,
+      overflow: host.style.overflow,
+      position: host.style.position,
+      width: host.style.width,
+    };
+    const frameElement = frame instanceof HTMLElement ? frame : null;
+    const framePreviousStyle = frameElement
+      ? {
+          overflow: frameElement.style.overflow,
+          position: frameElement.style.position,
+        }
+      : null;
+
+    const applyHostFill = () => {
+      host.style.display = 'block';
+      host.style.position = 'absolute';
+      host.style.inset = '0';
+      host.style.width = '100%';
+      host.style.height = '100%';
+      host.style.minWidth = '0';
+      host.style.minHeight = '0';
+      host.style.maxWidth = 'none';
+      host.style.maxHeight = 'none';
+      host.style.overflow = 'hidden';
+    };
+    const applyFrameContainment = () => {
+      if (!frameElement) {
+        return;
+      }
+
+      const framePosition = window.getComputedStyle(frameElement).position;
+
+      if (framePosition === 'static') {
+        frameElement.style.position = 'relative';
+      }
+
+      frameElement.style.overflow = 'hidden';
+    };
+    const stabilizeTimers = [0, 50, 150, 350, 700, 1200, 2000].map((delay) =>
+      window.setTimeout(() => {
+        applyHostFill();
+        applyFrameContainment();
+      }, delay),
+    );
+
+    applyHostFill();
+    applyFrameContainment();
+
+    return () => {
+      stabilizeTimers.forEach((timer) => window.clearTimeout(timer));
+      host.style.display = hostPreviousStyle.display;
+      host.style.position = hostPreviousStyle.position;
+      host.style.inset = hostPreviousStyle.inset;
+      host.style.width = hostPreviousStyle.width;
+      host.style.height = hostPreviousStyle.height;
+      host.style.minWidth = hostPreviousStyle.minWidth;
+      host.style.minHeight = hostPreviousStyle.minHeight;
+      host.style.maxWidth = hostPreviousStyle.maxWidth;
+      host.style.maxHeight = hostPreviousStyle.maxHeight;
+      host.style.overflow = hostPreviousStyle.overflow;
+
+      if (frameElement && framePreviousStyle) {
+        frameElement.style.position = framePreviousStyle.position;
+        frameElement.style.overflow = framePreviousStyle.overflow;
+      }
+    };
+  }, [fillParent]);
+
+  useLayoutEffect(() => {
+    const element = sectionRef.current;
+
+    if (!element) {
+      return undefined;
+    }
+
+    const host = getShadowHostElement(element);
+    const frame = findComposedClosest(element, '.frame');
+    const frameElement = frame instanceof HTMLElement ? frame : null;
+    const updateRenderSize = () => {
+      const nextSize = measureSceneTargetSize(element, fillParent);
+
+      if (!nextSize) {
+        return;
+      }
+
+      setRenderSize((current) =>
+        current?.width === nextSize.width && current.height === nextSize.height ? current : nextSize,
+      );
+    };
+
+    updateRenderSize();
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateRenderSize) : null;
+    const stabilizeTimers = [0, 50, 150, 350, 700, 1200, 2000].map((delay) =>
+      window.setTimeout(updateRenderSize, delay),
+    );
+
+    resizeObserver?.observe(element);
+    if (host) {
+      resizeObserver?.observe(host);
+    }
+    if (frameElement) {
+      resizeObserver?.observe(frameElement);
+    }
+
+    window.addEventListener('resize', updateRenderSize);
+    window.addEventListener('load', updateRenderSize);
+
+    return () => {
+      stabilizeTimers.forEach((timer) => window.clearTimeout(timer));
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', updateRenderSize);
+      window.removeEventListener('load', updateRenderSize);
+    };
+  }, [fillParent]);
 
   useEffect(() => {
     setCameraPosition({
@@ -1658,62 +1883,85 @@ export function ChessScene({
         backgroundPosition: 'center, center, center',
         backgroundRepeat: 'no-repeat, no-repeat, no-repeat',
         backgroundSize: 'auto, auto, cover',
+        alignSelf: 'stretch',
+        boxSizing: 'border-box',
+        flex: '1 1 auto',
         height: fillParent ? '100%' : undefined,
+        inset: fillParent ? 0 : undefined,
+        isolation: 'isolate',
+        justifySelf: 'stretch',
+        maxWidth: 'none',
         minHeight: fillParent ? 0 : undefined,
         overflow: 'hidden',
-        position: 'relative',
+        position: fillParent ? 'absolute' : 'relative',
+        contain: 'paint',
         width: '100%',
       }}
     >
-      <Canvas
-        dpr={[1, 1.75]}
-        gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
-        onCreated={({ gl }) => {
-          gl.setClearColor(0x000000, 0);
-          gl.shadowMap.enabled = true;
-          gl.shadowMap.type = THREE.PCFSoftShadowMap;
-          gl.toneMappingExposure = 1.12;
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 1,
+          width: renderSize ? `${renderSize.width}px` : '100%',
+          height: renderSize ? `${renderSize.height}px` : '100%',
+          overflow: 'hidden',
         }}
-        shadows
-        style={{ position: 'absolute', inset: 0, zIndex: 1 }}
       >
-        <ChessSceneCamera
-          fov={cameraFovValue}
-          mode={cameraMode}
-          position={cameraPosition}
-          target={cameraTarget}
-        />
-        {showGui ? (
-          <DebugOrbitControls
-            enabled={orbitEnabled}
-            key={cameraMode}
-            onChangeEnd={({ position, target }) => {
-              setCameraPosition({
-                x: clampCameraAxis('x', position.x),
-                y: clampCameraAxis('y', position.y),
-                z: clampCameraAxis('z', position.z),
-              });
-              setCameraTarget(target);
-            }}
+        <Canvas
+          dpr={[1, 1.75]}
+          gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+          onCreated={({ gl }) => {
+            gl.setClearColor(0x000000, 0);
+            gl.shadowMap.enabled = true;
+            gl.shadowMap.type = THREE.PCFShadowMap;
+            gl.toneMappingExposure = 1.12;
+          }}
+          shadows
+          style={{
+            display: 'block',
+            width: renderSize ? `${renderSize.width}px` : '100%',
+            height: renderSize ? `${renderSize.height}px` : '100%',
+          }}
+        >
+          <ChessSceneCamera
+            fov={cameraFovValue}
+            mode={cameraMode}
             position={cameraPosition}
             target={cameraTarget}
           />
-        ) : null}
-        <ChessLighting enabled={lightsEnabled} floorTransform={floorTransform} sceneLights={sceneLights} />
-        <ChessBoardScene
-          animationEnabled={animationActive}
-          chessModelUrl={resolvedChessModelUrl}
-          floorLight={floorLight}
-          floorMeshTransform={floorMeshTransform}
-          floorModelUrl={resolvedFloorModelUrl}
-          floorTransform={floorTransform}
-          lightsEnabled={lightsEnabled}
-          cameraFov={cameraFovValue}
-          modelScale={modelScale}
-          pieceTransforms={pieceTransforms}
-          pointerTarget={pointerTarget}
-        />
-      </Canvas>
+          {showGui ? (
+            <DebugOrbitControls
+              enabled={orbitEnabled}
+              key={cameraMode}
+              onChangeEnd={({ position, target }) => {
+                setCameraPosition({
+                  x: clampCameraAxis('x', position.x),
+                  y: clampCameraAxis('y', position.y),
+                  z: clampCameraAxis('z', position.z),
+                });
+                setCameraTarget(target);
+              }}
+              position={cameraPosition}
+              target={cameraTarget}
+            />
+          ) : null}
+          <ChessLighting enabled={lightsEnabled} floorTransform={floorTransform} sceneLights={sceneLights} />
+          <ChessBoardScene
+            animationEnabled={animationActive}
+            chessModelUrl={resolvedChessModelUrl}
+            floorLight={floorLight}
+            floorMeshTransform={floorMeshTransform}
+            floorModelUrl={resolvedFloorModelUrl}
+            floorTransform={floorTransform}
+            lightsEnabled={lightsEnabled}
+            cameraFov={cameraFovValue}
+            modelScale={modelScale}
+            pieceTransforms={pieceTransforms}
+            pointerTarget={pointerTarget}
+          />
+        </Canvas>
+      </div>
       {showGui ? (
         <div
           ref={guiRootRef}
