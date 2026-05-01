@@ -1,17 +1,12 @@
 import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 
-export const defaultFloorLightColor = '#fff7da';
-
-export interface FloorLightSettings {
-  color: string;
-  enabled: boolean;
-  intensity: number;
-  opacity: number;
-  x: number;
-  y: number;
-  z: number;
-}
+import {
+  clampFloorLightIntensity,
+  clampFloorLightOpacity,
+  defaultFloorLightColor,
+  type FloorLightSettings,
+} from './FloorTopLight.config';
 
 interface FloorTopLightProps {
   color?: THREE.ColorRepresentation;
@@ -38,10 +33,10 @@ function createFloorLightTexture() {
     return createFallbackTexture();
   }
 
-  canvas.width = 768;
-  canvas.height = 768;
+  canvas.width = 256;
+  canvas.height = 256;
 
-  const gradient = context.createRadialGradient(384, 384, 32, 384, 384, 384);
+  const gradient = context.createRadialGradient(128, 128, 11, 128, 128, 128);
   gradient.addColorStop(0, 'rgba(255, 248, 228, 1)');
   gradient.addColorStop(0.18, 'rgba(255, 236, 180, 0.84)');
   gradient.addColorStop(0.42, 'rgba(255, 223, 140, 0.34)');
@@ -62,14 +57,6 @@ function createFloorLightTexture() {
   texture.needsUpdate = true;
 
   return texture;
-}
-
-export function clampFloorLightOpacity(value: number) {
-  return THREE.MathUtils.clamp(value, 0, 1);
-}
-
-export function clampFloorLightIntensity(value: number) {
-  return THREE.MathUtils.clamp(value, 0, 4);
 }
 
 export function FloorTopLight({

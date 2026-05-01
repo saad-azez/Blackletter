@@ -5,8 +5,10 @@ import {
   useGLTF,
 } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import GUI from 'lil-gui';
+import type GUI from 'lil-gui';
 import {
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -17,7 +19,6 @@ import {
 import * as THREE from 'three';
 
 import battlefieldTextureUrl from '../assets/Textures/low_angle_battlefield_depth_of_field_pillars_cinema.jpeg';
-import { DebugOrbitControls } from './DebugOrbitControls';
 import {
   chessAmbientIntensityControl,
   chessCameraAxisControls,
@@ -50,16 +51,19 @@ import {
   type SceneCameraPosition,
   type SceneTransform,
 } from './ChessScene.config';
+import { FloorTopLight } from './FloorTopLight';
 import {
-  FloorTopLight,
   clampFloorLightIntensity,
   clampFloorLightOpacity,
   defaultFloorLightColor,
   type FloorLightSettings,
-} from './FloorTopLight';
+} from './FloorTopLight.config';
 
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const cameraModes = ['Perspective', 'Orthographic'] as const;
+const DebugOrbitControls = lazy(() =>
+  import('./DebugOrbitControls').then((module) => ({ default: module.DebugOrbitControls })),
+);
 const defaultFloorModelUrl = new URL('../assets/Floor/Floor.glb', import.meta.url).href;
 const defaultChessModelUrl = new URL('../assets/Chess/chees.glb', import.meta.url).href;
 const compactChessBreakpoint = 1024;
@@ -970,9 +974,16 @@ export function ChessScene({
       return undefined;
     }
 
-    guiRootRef.current.replaceChildren();
+    let disposed = false;
 
-    const gui = new GUI({ container: guiRootRef.current, title: 'Chess Scene Controls' });
+    void import('lil-gui').then(({ default: GUI }) => {
+      if (disposed || !guiRootRef.current) {
+        return;
+      }
+
+      guiRootRef.current.replaceChildren();
+
+      const gui = new GUI({ container: guiRootRef.current, title: 'Chess Scene Controls' });
     const guiState: GuiState = {
       animationEnabled: animationActive,
       board: normalizeFloorTransform({ ...floorTransform }),
@@ -1739,8 +1750,15 @@ export function ChessScene({
     floorLightFolder.close();
     piecesFolder.close();
 
-    return () => {
+    if (disposed) {
       gui.destroy();
+      return;
+    }
+    });
+
+    return () => {
+      disposed = true;
+      guiRef.current?.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
       guiControllersRef.current = {
@@ -1909,13 +1927,14 @@ export function ChessScene({
         }}
       >
         <Canvas
-          dpr={[1, 1.75]}
-          gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+          dpr={[1, 1.25]}
+          gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', stencil: false }}
           onCreated={({ gl }) => {
             gl.setClearColor(0x000000, 0);
             gl.shadowMap.enabled = true;
             gl.shadowMap.type = THREE.PCFShadowMap;
             gl.toneMappingExposure = 1.12;
+            gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); }, false);
           }}
           shadows
           style={{
@@ -1931,20 +1950,22 @@ export function ChessScene({
             target={cameraTarget}
           />
           {showGui ? (
-            <DebugOrbitControls
-              enabled={orbitEnabled}
-              key={cameraMode}
-              onChangeEnd={({ position, target }) => {
-                setCameraPosition({
-                  x: clampCameraAxis('x', position.x),
-                  y: clampCameraAxis('y', position.y),
-                  z: clampCameraAxis('z', position.z),
-                });
-                setCameraTarget(target);
-              }}
-              position={cameraPosition}
-              target={cameraTarget}
-            />
+            <Suspense fallback={null}>
+              <DebugOrbitControls
+                enabled={orbitEnabled}
+                key={cameraMode}
+                onChangeEnd={({ position, target }) => {
+                  setCameraPosition({
+                    x: clampCameraAxis('x', position.x),
+                    y: clampCameraAxis('y', position.y),
+                    z: clampCameraAxis('z', position.z),
+                  });
+                  setCameraTarget(target);
+                }}
+                position={cameraPosition}
+                target={cameraTarget}
+              />
+            </Suspense>
           ) : null}
           <ChessLighting enabled={lightsEnabled} floorTransform={floorTransform} sceneLights={sceneLights} />
           <ChessBoardScene

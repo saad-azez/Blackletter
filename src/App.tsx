@@ -1,7 +1,11 @@
-import { CastleScene } from './components/CastleScene';
-import { CharacterScene } from './components/CharacterScene';
-import { ChessScene } from './components/ChessScene';
-import { CurtainDemo } from './components/CurtainDemo';
+import { lazy, Suspense } from 'react';
+
+const CastleScene = lazy(() => import('./components/CastleScene'));
+const CharacterScene = lazy(() => import('./components/CharacterScene'));
+const ChessScene = lazy(() => import('./components/ChessScene'));
+const CurtainDemo = lazy(() =>
+  import('./components/CurtainDemo').then((module) => ({ default: module.CurtainDemo })),
+);
 
 type SceneRoute = 'castle' | 'character' | 'chess';
 
@@ -154,13 +158,15 @@ function ScenePage({ debug, scene }: { debug: boolean; scene: SceneRoute }) {
   return (
     <div className="scene-page" style={shellStyles.layout}>
       <SceneChrome debug={debug} scene={scene} />
-      {scene === 'castle' ? (
-        <CastleScene animationEnabled modelScale={1} showGui={debug} />
-      ) : scene === 'character' ? (
-        <CharacterScene animationEnabled modelScale={1} showGui={debug} />
-      ) : (
-        <ChessScene animationEnabled modelScale={1} showGui={debug} />
-      )}
+      <Suspense fallback={null}>
+        {scene === 'castle' ? (
+          <CastleScene animationEnabled modelScale={1} showGui={debug} />
+        ) : scene === 'character' ? (
+          <CharacterScene animationEnabled modelScale={1} showGui={debug} />
+        ) : (
+          <ChessScene animationEnabled modelScale={1} showGui={debug} />
+        )}
+      </Suspense>
     </div>
   );
 }
@@ -313,7 +319,11 @@ function App() {
   const pathname = typeof window === 'undefined' ? '/' : window.location.pathname;
 
   if (normalizePathname(pathname) === '/curtain') {
-    return <CurtainDemo />;
+    return (
+      <Suspense fallback={null}>
+        <CurtainDemo />
+      </Suspense>
+    );
   }
 
   const route = parseRoute(pathname);

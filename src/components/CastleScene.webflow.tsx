@@ -31,6 +31,12 @@ const castleSceneWebflow = declareComponent(CastleScene, {
       defaultValue: '',
       tooltip: 'Paste the public URL for the rocks foreground image.',
     }),
+    animationEnabled: props.Boolean({
+      name: 'Pointer Drift',
+      defaultValue: true,
+      trueLabel: 'On',
+      falseLabel: 'Off',
+    }),
   },
 });
 

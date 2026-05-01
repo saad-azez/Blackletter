@@ -5,11 +5,11 @@ import {
   useGLTF,
 } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import GUI from 'lil-gui';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import type GUI from 'lil-gui';
+import gsap from 'gsap';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 
-import { DebugOrbitControls } from './DebugOrbitControls';
 import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.png';
 import rocksTextureUrl from '../assets/Textures/rocks.png';
 import {
@@ -33,19 +33,22 @@ import {
   type SceneCameraPosition,
   type TowerTransform,
 } from './CastleScene.config';
+import { FloorTopLight } from './FloorTopLight';
 import {
-  FloorTopLight,
   clampFloorLightIntensity,
   clampFloorLightOpacity,
   defaultFloorLightColor,
   type FloorLightSettings,
-} from './FloorTopLight';
+} from './FloorTopLight.config';
 
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const cameraModes = ['Perspective', 'Orthographic'] as const;
 const defaultCastleModelUrl = new URL('../assets/Castle/Castle-Building/castle-building.glb', import.meta.url).href;
 const defaultTowerModelUrl = new URL('../assets/Castle/Tower/Tower.glb', import.meta.url).href;
 const defaultSkyTextureUrl = new URL('../assets/Textures/vortex.jpeg', import.meta.url).href;
+const DebugOrbitControls = lazy(() =>
+  import('./DebugOrbitControls').then((module) => ({ default: module.DebugOrbitControls })),
+);
 
 useGLTF.preload(defaultCastleModelUrl, dracoDecoderPath);
 useGLTF.preload(defaultTowerModelUrl, dracoDecoderPath);
@@ -136,6 +139,7 @@ interface CastleModelProps {
   modelScale: number;
   modelUrl: string;
   onFloorScreenRectChange: (screenRect: FloorScreenRect | null) => void;
+  pointerLastMoved: MutableRefObject<number>;
   pointerTarget: MutableRefObject<THREE.Vector2>;
   towerModelUrl: string;
   towerTransforms: TowerTransform[];
@@ -538,8 +542,10 @@ export function CastleScene({
   skyTextureUrl = '',
   towerModelUrl = '',
 }: CastleSceneProps) {
+  const shellRef = useRef<HTMLElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
+  const pointerLastMoved = useRef(Date.now());
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
@@ -626,9 +632,7 @@ export function CastleScene({
   }, [resolvedCastleModelUrl, resolvedFloorModelUrl, resolvedTowerModelUrl]);
 
   useEffect(() => {
-    const element = sectionRef.current;
-
-    if (!element) {
+    if (typeof window === 'undefined') {
       return undefined;
     }
 
@@ -636,8 +640,25 @@ export function CastleScene({
       pointerTarget.current.set(0, 0);
     };
 
-    const updatePointer = (event: PointerEvent) => {
+    let animationFrameId = 0;
+    let pendingPointerPosition: { x: number; y: number } | null = null;
+
+    const updatePointerFromLatestPosition = () => {
+      animationFrameId = 0;
+
+      if (!pendingPointerPosition) {
+        return;
+      }
+
+      const element = shellRef.current ?? sectionRef.current;
+
+      if (!element) {
+        resetPointer();
+        return;
+      }
+
       const bounds = element.getBoundingClientRect();
+      const { x: clientX, y: clientY } = pendingPointerPosition;
 
       if (!bounds.width || !bounds.height) {
         resetPointer();
@@ -645,20 +666,32 @@ export function CastleScene({
       }
 
       const withinBounds =
-        event.clientX >= bounds.left &&
-        event.clientX <= bounds.right &&
-        event.clientY >= bounds.top &&
-        event.clientY <= bounds.bottom;
+        clientX >= bounds.left &&
+        clientX <= bounds.right &&
+        clientY >= bounds.top &&
+        clientY <= bounds.bottom;
 
       if (!withinBounds) {
         resetPointer();
         return;
       }
 
-      const normalizedX = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
-      const normalizedY = 1 - ((event.clientY - bounds.top) / bounds.height) * 2;
+      const normalizedX = ((clientX - bounds.left) / bounds.width) * 2 - 1;
+      const normalizedY = 1 - ((clientY - bounds.top) / bounds.height) * 2;
 
       pointerTarget.current.set(shapePointerAxis(normalizedX), shapePointerAxis(normalizedY));
+      pointerLastMoved.current = Date.now();
+    };
+
+    const updatePointer = (event: PointerEvent) => {
+      pendingPointerPosition = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+
+      if (!animationFrameId) {
+        animationFrameId = window.requestAnimationFrame(updatePointerFromLatestPosition);
+      }
     };
 
     const handleVisibilityChange = () => {
@@ -667,15 +700,27 @@ export function CastleScene({
       }
     };
 
-    element.addEventListener('pointermove', updatePointer, { passive: true });
-    element.addEventListener('pointerleave', resetPointer);
+    const handleOrientation = (e: DeviceOrientationEvent) => {
+      if (e.gamma === null || e.beta === null) return;
+      const gx = THREE.MathUtils.clamp(e.gamma / 25, -1, 1);
+      const gy = THREE.MathUtils.clamp((e.beta - 25) / 25, -1, 1);
+      pointerTarget.current.set(shapePointerAxis(gx), shapePointerAxis(-gy));
+      pointerLastMoved.current = Date.now();
+    };
+
+    window.addEventListener('pointermove', updatePointer, { passive: true });
     window.addEventListener('blur', resetPointer);
+    window.addEventListener('deviceorientation', handleOrientation, { passive: true });
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      element.removeEventListener('pointermove', updatePointer);
-      element.removeEventListener('pointerleave', resetPointer);
+      if (animationFrameId) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+
+      window.removeEventListener('pointermove', updatePointer);
       window.removeEventListener('blur', resetPointer);
+      window.removeEventListener('deviceorientation', handleOrientation);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
@@ -688,6 +733,13 @@ export function CastleScene({
       guiControllersRef.current = { castle: {}, floor: {}, floorLight: {}, towers: [] };
       return undefined;
     }
+
+    let disposed = false;
+
+    void import('lil-gui').then(({ default: GUI }) => {
+      if (disposed || !guiRootRef.current) {
+        return;
+      }
 
     guiRootRef.current.replaceChildren();
 
@@ -1277,8 +1329,15 @@ export function CastleScene({
     floorFolder.close();
     floorLightFolder.close();
 
+      if (disposed) {
+        gui.destroy();
+        return;
+      }
+    });
+
     return () => {
-      gui.destroy();
+      disposed = true;
+      guiRef.current?.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
       guiControllersRef.current = { castle: {}, floor: {}, floorLight: {}, towers: [] };
@@ -1358,11 +1417,13 @@ export function CastleScene({
   }, [animationActive, cameraLocked, cameraMode, cameraPosition, castleTransform, floorLight, floorTransform, lightsEnabled, towerTransforms]);
 
   return (
-    <section className="castle-scene-shell">
+    <section className="castle-scene-shell" ref={shellRef}>
       <img
         aria-hidden="true"
         alt=""
         src={resolvedSkyTextureUrl}
+        decoding="async"
+        loading="eager"
         style={{
           height: '100%',
           inset: 0,
@@ -1383,10 +1444,11 @@ export function CastleScene({
         }}
       >
         <Canvas
-          dpr={[1, 1.5]}
-          gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+          dpr={[1, 1.25]}
+          gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', stencil: false }}
           onCreated={({ gl }) => {
             gl.setClearColor(0x000000, 0);
+            gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); }, false);
           }}
           style={{ position: 'absolute', inset: 0 }}
         >
@@ -1396,20 +1458,22 @@ export function CastleScene({
             target={cameraTarget}
           />
           {showGui ? (
-            <DebugOrbitControls
-              enabled={cameraLocked}
-              key={cameraMode}
-              onChangeEnd={({ position, target }) => {
-                setCameraPosition({
-                  x: clampCameraAxis('x', position.x),
-                  y: clampCameraAxis('y', position.y),
-                  z: clampCameraAxis('z', position.z),
-                });
-                setCameraTarget(target);
-              }}
-              position={cameraPosition}
-              target={cameraTarget}
-            />
+            <Suspense fallback={null}>
+              <DebugOrbitControls
+                enabled={cameraLocked}
+                key={cameraMode}
+                onChangeEnd={({ position, target }) => {
+                  setCameraPosition({
+                    x: clampCameraAxis('x', position.x),
+                    y: clampCameraAxis('y', position.y),
+                    z: clampCameraAxis('z', position.z),
+                  });
+                  setCameraTarget(target);
+                }}
+                position={cameraPosition}
+                target={cameraTarget}
+              />
+            </Suspense>
           ) : null}
           <CastleLighting enabled={lightsEnabled} />
           <CastleModel
@@ -1423,6 +1487,7 @@ export function CastleScene({
             modelScale={modelScale}
             modelUrl={resolvedCastleModelUrl}
             onFloorScreenRectChange={setFloorScreenRect}
+            pointerLastMoved={pointerLastMoved}
             pointerTarget={pointerTarget}
             towerModelUrl={resolvedTowerModelUrl}
             towerTransforms={towerTransforms}
@@ -1445,6 +1510,8 @@ export function CastleScene({
         aria-hidden="true"
         alt=""
         src={rocksBackgroundImage}
+        decoding="async"
+        loading="lazy"
         style={{
           bottom: 0,
           height: '85vh',
@@ -1487,11 +1554,20 @@ function CastleModel({
   modelScale,
   modelUrl,
   onFloorScreenRectChange,
+  pointerLastMoved,
   pointerTarget,
   towerModelUrl,
   towerTransforms,
 }: CastleModelProps) {
   const groupRef = useRef<THREE.Group>(null);
+  const entranceRef = useRef({ y: -3.0, scale: 0.85 });
+  const entranceActiveRef = useRef(true);
+  const springRef = useRef({
+    px: 0, py: -3.0, pz: 0,
+    rx: 0, ry: 0, rz: 0,
+    vpx: 0, vpy: 0, vpz: 0,
+    vrx: 0, vry: 0, vrz: 0,
+  });
   const { camera, size } = useThree();
   const gltf = useGLTF(modelUrl, dracoDecoderPath);
   const towerGltf = useGLTF(towerModelUrl, dracoDecoderPath);
@@ -1557,42 +1633,96 @@ function CastleModel({
   const detachedTowers = responsiveTowerTransforms.slice(1);
 
   useEffect(() => {
-    if (!groupRef.current) {
-      return;
-    }
-
-    groupRef.current.position.set(0, 0, 0);
-    groupRef.current.rotation.set(0, 0, 0);
+    const s = springRef.current;
+    s.px = 0; s.py = entranceRef.current.y; s.pz = 0;
+    s.rx = 0; s.ry = 0; s.rz = 0;
+    s.vpx = 0; s.vpy = 0; s.vpz = 0;
+    s.vrx = 0; s.vry = 0; s.vrz = 0;
   }, [animationEnabled, preparedCastle.root, preparedTower]);
 
-  useFrame((_, delta) => {
+  useEffect(() => {
+    entranceActiveRef.current = true;
+    entranceRef.current.y = -3.5;
+    entranceRef.current.scale = 0.82;
+    springRef.current.py = -3.5;
+    springRef.current.vpy = 0;
+
+    const tween = gsap.to(entranceRef.current, {
+      y: 0,
+      scale: 1,
+      duration: 2.0,
+      ease: 'power4.out',
+      onComplete: () => {
+        entranceActiveRef.current = false;
+      },
+    });
+
+    return () => {
+      tween.kill();
+    };
+  }, []);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const s = springRef.current;
+        s.vpx = 0; s.vpy = 0; s.vpz = 0;
+        s.vrx = 0; s.vry = 0; s.vrz = 0;
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  useFrame((state, delta) => {
     if (!groupRef.current) {
       return;
     }
 
-    if (!animationEnabled) {
-      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, 0, 3.2, delta);
-      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, 0, 3.2, delta);
-      groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, 0, 3, delta);
-      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, 0, 3.4, delta);
-      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, 0, 3.4, delta);
-      groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, 0, 3.2, delta);
-      return;
-    }
+    // Clamp delta so tab-switch gaps never blow up the spring integrator
+    const dt = Math.min(delta, 1 / 30);
+
+    const entranceY = entranceActiveRef.current ? entranceRef.current.y : 0;
+    const entranceScale = entranceActiveRef.current ? entranceRef.current.scale : 1;
+    const time = state.clock.getElapsedTime();
+
+    // Idle float fades in after 1.5s of no pointer activity
+    const idleStrength = THREE.MathUtils.clamp(
+      ((Date.now() - pointerLastMoved.current) / 1000 - 1.5) / 2.5,
+      0, 1,
+    );
+    const idle = Math.sin(time * 0.55) * 0.038 * idleStrength;
+    const idleRot = Math.sin(time * 0.4) * 0.014 * idleStrength;
 
     const { x, y } = pointerTarget.current;
+    const tpx = animationEnabled ? x * 0.16 : 0;
+    const tpy = animationEnabled ? y * 0.08 + entranceY + idle : entranceY + idle;
+    const tpz = animationEnabled ? -Math.abs(x) * 0.05 - Math.abs(y) * 0.03 : 0;
+    const trx = animationEnabled ? -y * 0.08 : 0;
+    const tRY = animationEnabled ? x * 0.16 + idleRot : idleRot;
+    const trz = animationEnabled ? x * y * -0.035 : 0;
 
-    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.12, 3.2, delta);
-    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.06, 3.2, delta);
-    groupRef.current.position.z = THREE.MathUtils.damp(
-      groupRef.current.position.z,
-      -Math.abs(x) * 0.04 - Math.abs(y) * 0.03,
-      3,
-      delta,
-    );
-    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.06, 3.4, delta);
-    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.12, 3.4, delta);
-    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.03, 3.2, delta);
+    // Spring physics — underdamped for a natural slight overshoot
+    const stiffness = 9;
+    const damping = 4.2;
+    const s = springRef.current;
+
+    s.vpx += (tpx - s.px) * stiffness * dt - s.vpx * damping * dt;
+    s.px += s.vpx * dt;
+    s.vpy += (tpy - s.py) * stiffness * dt - s.vpy * damping * dt;
+    s.py += s.vpy * dt;
+    s.vpz += (tpz - s.pz) * stiffness * dt - s.vpz * damping * dt;
+    s.pz += s.vpz * dt;
+    s.vrx += (trx - s.rx) * stiffness * dt - s.vrx * damping * dt;
+    s.rx += s.vrx * dt;
+    s.vry += (tRY - s.ry) * stiffness * dt - s.vry * damping * dt;
+    s.ry += s.vry * dt;
+    s.vrz += (trz - s.rz) * stiffness * dt - s.vrz * damping * dt;
+    s.rz += s.vrz * dt;
+
+    groupRef.current.position.set(s.px, s.py, s.pz);
+    groupRef.current.rotation.set(s.rx, s.ry, s.rz);
+    groupRef.current.scale.setScalar(entranceScale);
   });
 
   return (
@@ -1828,7 +1958,7 @@ function FloorScene({
       compositionFloorScreenRect?.width
         ? (size.width * 1.04) / Math.max(compositionFloorScreenRect.width, 1)
         : 1,
-    [compositionFloorScreenRect?.width, size.width],
+    [compositionFloorScreenRect, size.width],
   );
   const floorScale = useMemo(() => {
     return {
@@ -1867,8 +1997,6 @@ function FloorScene({
   }, [
     camera,
     floorMatrix,
-    floorScale.x,
-    floorScale.z,
     preparedFloorSurface.points,
     size.height,
     size.width,

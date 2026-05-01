@@ -1,7 +1,9 @@
 import { OrthographicCamera, PerspectiveCamera, useGLTF } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import GUI from 'lil-gui';
+import type GUI from 'lil-gui';
 import {
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -12,7 +14,6 @@ import {
 import * as THREE from 'three';
 
 import charactersBackgroundTextureUrl from '../assets/Textures/characters-background.jpeg';
-import { DebugOrbitControls } from './DebugOrbitControls';
 import {
   backCharacterTransformDefaults,
   buildingTransformDefaults,
@@ -28,6 +29,9 @@ import {
 
 const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const cameraModes = ['Perspective', 'Orthographic'] as const;
+const DebugOrbitControls = lazy(() =>
+  import('./DebugOrbitControls').then((module) => ({ default: module.DebugOrbitControls })),
+);
 const defaultCharacterModelUrl = new URL('../assets/Characters/Front-character.glb', import.meta.url).href;
 const defaultBackCharacterModelUrl = new URL('../assets/Characters/Back-character.glb', import.meta.url).href;
 const defaultBuildingModelUrl = new URL('../assets/Characters/Building.glb', import.meta.url).href;
@@ -445,9 +449,16 @@ export function CharacterScene({
       return undefined;
     }
 
-    guiRootRef.current.replaceChildren();
+    let disposed = false;
 
-    const gui = new GUI({ container: guiRootRef.current, title: 'Character Scene Controls' });
+    void import('lil-gui').then(({ default: GUI }) => {
+      if (disposed || !guiRootRef.current) {
+        return;
+      }
+
+      guiRootRef.current.replaceChildren();
+
+      const gui = new GUI({ container: guiRootRef.current, title: 'Character Scene Controls' });
     const guiState: GuiState = {
       animationEnabled: animationActive,
       backCharacter: normalizeCharacterTransform({ ...backCharacterTransform }),
@@ -971,10 +982,17 @@ export function CharacterScene({
     backgroundFolder.close();
     characterFolder.close();
     backCharacterFolder.close();
-    buildingFolder.close();
+      buildingFolder.close();
+
+      if (disposed) {
+        gui.destroy();
+        return;
+      }
+    });
 
     return () => {
-      gui.destroy();
+      disposed = true;
+      guiRef.current?.destroy();
       guiRef.current = null;
       guiStateRef.current = null;
       guiControllersRef.current = { backCharacter: {}, building: {}, character: {} };
@@ -1057,11 +1075,12 @@ export function CharacterScene({
       }}
     >
       <Canvas
-        dpr={[1, 1.5]}
-        gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+        dpr={[1, 1.25]}
+        gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', stencil: false }}
         onCreated={({ gl }) => {
           gl.setClearColor(0x000000, 0);
           gl.toneMappingExposure = 1;
+          gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); }, false);
         }}
         style={{ position: 'absolute', inset: 0 }}
       >
@@ -1071,20 +1090,22 @@ export function CharacterScene({
           target={cameraTarget}
         />
         {showGui ? (
-          <DebugOrbitControls
-            enabled={orbitEnabled}
-            key={cameraMode}
-            onChangeEnd={({ position, target }) => {
-              setCameraPosition({
-                x: clampCameraAxis('x', position.x),
-                y: clampCameraAxis('y', position.y),
-                z: clampCameraAxis('z', position.z),
-              });
-              setCameraTarget(target);
-            }}
-            position={cameraPosition}
-            target={cameraTarget}
-          />
+          <Suspense fallback={null}>
+            <DebugOrbitControls
+              enabled={orbitEnabled}
+              key={cameraMode}
+              onChangeEnd={({ position, target }) => {
+                setCameraPosition({
+                  x: clampCameraAxis('x', position.x),
+                  y: clampCameraAxis('y', position.y),
+                  z: clampCameraAxis('z', position.z),
+                });
+                setCameraTarget(target);
+              }}
+              position={cameraPosition}
+              target={cameraTarget}
+            />
+          </Suspense>
         ) : null}
         <CharacterStage
           characterModelUrl={resolvedBackCharacterModelUrl}

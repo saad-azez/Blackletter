@@ -111,13 +111,12 @@ canvas {
 }
 
 .castle-scene-viewport {
+  inset: 0;
   max-width: 100vw;
+  min-height: 100%;
+  position: absolute;
   width: 100%;
-  min-height: 100vh;
-  min-height: 100svh;
-  height: 100vh;
-  height: 100svh;
-  height: 100dvh;
+  height: 100%;
 }
 
 .chess-scene-viewport {

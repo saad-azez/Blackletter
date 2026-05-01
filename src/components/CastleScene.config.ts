@@ -1,4 +1,4 @@
-import { defaultFloorLightColor, type FloorLightSettings } from './FloorTopLight';
+import { defaultFloorLightColor, type FloorLightSettings } from './FloorTopLight.config';
 
 export interface SceneCameraPosition {
   x: number;
