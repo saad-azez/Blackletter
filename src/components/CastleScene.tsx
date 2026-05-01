@@ -542,7 +542,6 @@ export function CastleScene({
   skyTextureUrl = '',
   towerModelUrl = '',
 }: CastleSceneProps) {
-  const shellRef = useRef<HTMLElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
   const pointerLastMoved = useRef(Date.now());
@@ -632,7 +631,9 @@ export function CastleScene({
   }, [resolvedCastleModelUrl, resolvedFloorModelUrl, resolvedTowerModelUrl]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    const element = sectionRef.current;
+
+    if (!element) {
       return undefined;
     }
 
@@ -640,58 +641,19 @@ export function CastleScene({
       pointerTarget.current.set(0, 0);
     };
 
-    let animationFrameId = 0;
-    let pendingPointerPosition: { x: number; y: number } | null = null;
-
-    const updatePointerFromLatestPosition = () => {
-      animationFrameId = 0;
-
-      if (!pendingPointerPosition) {
-        return;
-      }
-
-      const element = shellRef.current ?? sectionRef.current;
-
-      if (!element) {
-        resetPointer();
-        return;
-      }
-
+    const updatePointer = (event: PointerEvent) => {
       const bounds = element.getBoundingClientRect();
-      const { x: clientX, y: clientY } = pendingPointerPosition;
 
       if (!bounds.width || !bounds.height) {
         resetPointer();
         return;
       }
 
-      const withinBounds =
-        clientX >= bounds.left &&
-        clientX <= bounds.right &&
-        clientY >= bounds.top &&
-        clientY <= bounds.bottom;
-
-      if (!withinBounds) {
-        resetPointer();
-        return;
-      }
-
-      const normalizedX = ((clientX - bounds.left) / bounds.width) * 2 - 1;
-      const normalizedY = 1 - ((clientY - bounds.top) / bounds.height) * 2;
+      const normalizedX = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+      const normalizedY = 1 - ((event.clientY - bounds.top) / bounds.height) * 2;
 
       pointerTarget.current.set(shapePointerAxis(normalizedX), shapePointerAxis(normalizedY));
       pointerLastMoved.current = Date.now();
-    };
-
-    const updatePointer = (event: PointerEvent) => {
-      pendingPointerPosition = {
-        x: event.clientX,
-        y: event.clientY,
-      };
-
-      if (!animationFrameId) {
-        animationFrameId = window.requestAnimationFrame(updatePointerFromLatestPosition);
-      }
     };
 
     const handleVisibilityChange = () => {
@@ -708,17 +670,15 @@ export function CastleScene({
       pointerLastMoved.current = Date.now();
     };
 
-    window.addEventListener('pointermove', updatePointer, { passive: true });
+    element.addEventListener('pointermove', updatePointer, { passive: true });
+    element.addEventListener('pointerleave', resetPointer);
     window.addEventListener('blur', resetPointer);
     window.addEventListener('deviceorientation', handleOrientation, { passive: true });
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      if (animationFrameId) {
-        window.cancelAnimationFrame(animationFrameId);
-      }
-
-      window.removeEventListener('pointermove', updatePointer);
+      element.removeEventListener('pointermove', updatePointer);
+      element.removeEventListener('pointerleave', resetPointer);
       window.removeEventListener('blur', resetPointer);
       window.removeEventListener('deviceorientation', handleOrientation);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -1417,7 +1377,7 @@ export function CastleScene({
   }, [animationActive, cameraLocked, cameraMode, cameraPosition, castleTransform, floorLight, floorTransform, lightsEnabled, towerTransforms]);
 
   return (
-    <section className="castle-scene-shell" ref={shellRef}>
+    <section className="castle-scene-shell">
       <img
         aria-hidden="true"
         alt=""
