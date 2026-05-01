@@ -542,7 +542,7 @@ export function CastleScene({
   skyTextureUrl = '',
   towerModelUrl = '',
 }: CastleSceneProps) {
-  const sectionRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
   const pointerLastMoved = useRef(Date.now());
   const guiRootRef = useRef<HTMLDivElement>(null);
@@ -1377,7 +1377,7 @@ export function CastleScene({
   }, [animationActive, cameraLocked, cameraMode, cameraPosition, castleTransform, floorLight, floorTransform, lightsEnabled, towerTransforms]);
 
   return (
-    <section className="castle-scene-shell">
+    <section className="castle-scene-shell" ref={sectionRef}>
       <img
         aria-hidden="true"
         alt=""
@@ -1398,7 +1398,6 @@ export function CastleScene({
       />
       <div
         className="castle-scene-viewport"
-        ref={sectionRef}
         style={{
           zIndex: 2,
         }}
@@ -1522,12 +1521,7 @@ function CastleModel({
   const groupRef = useRef<THREE.Group>(null);
   const entranceRef = useRef({ y: -3.0, scale: 0.85 });
   const entranceActiveRef = useRef(true);
-  const springRef = useRef({
-    px: 0, py: -3.0, pz: 0,
-    rx: 0, ry: 0, rz: 0,
-    vpx: 0, vpy: 0, vpz: 0,
-    vrx: 0, vry: 0, vrz: 0,
-  });
+  const smoothRef = useRef({ px: 0, py: -3.0, pz: 0, rx: 0, ry: 0, rz: 0 });
   const { camera, size } = useThree();
   const gltf = useGLTF(modelUrl, dracoDecoderPath);
   const towerGltf = useGLTF(towerModelUrl, dracoDecoderPath);
@@ -1593,19 +1587,16 @@ function CastleModel({
   const detachedTowers = responsiveTowerTransforms.slice(1);
 
   useEffect(() => {
-    const s = springRef.current;
+    const s = smoothRef.current;
     s.px = 0; s.py = entranceRef.current.y; s.pz = 0;
     s.rx = 0; s.ry = 0; s.rz = 0;
-    s.vpx = 0; s.vpy = 0; s.vpz = 0;
-    s.vrx = 0; s.vry = 0; s.vrz = 0;
   }, [animationEnabled, preparedCastle.root, preparedTower]);
 
   useEffect(() => {
     entranceActiveRef.current = true;
     entranceRef.current.y = -3.5;
     entranceRef.current.scale = 0.82;
-    springRef.current.py = -3.5;
-    springRef.current.vpy = 0;
+    smoothRef.current.py = -3.5;
 
     const tween = gsap.to(entranceRef.current, {
       y: 0,
@@ -1622,31 +1613,18 @@ function CastleModel({
     };
   }, []);
 
-  useEffect(() => {
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        const s = springRef.current;
-        s.vpx = 0; s.vpy = 0; s.vpz = 0;
-        s.vrx = 0; s.vry = 0; s.vrz = 0;
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, []);
-
   useFrame((state, delta) => {
     if (!groupRef.current) {
       return;
     }
 
-    // Clamp delta so tab-switch gaps never blow up the spring integrator
-    const dt = Math.min(delta, 1 / 30);
+    const dt = Math.min(delta, 1 / 20);
+    const alpha = Math.min(1, 6 * dt);
 
     const entranceY = entranceActiveRef.current ? entranceRef.current.y : 0;
     const entranceScale = entranceActiveRef.current ? entranceRef.current.scale : 1;
     const time = state.clock.getElapsedTime();
 
-    // Idle float fades in after 1.5s of no pointer activity
     const idleStrength = THREE.MathUtils.clamp(
       ((Date.now() - pointerLastMoved.current) / 1000 - 1.5) / 2.5,
       0, 1,
@@ -1662,23 +1640,13 @@ function CastleModel({
     const tRY = animationEnabled ? x * 0.16 + idleRot : idleRot;
     const trz = animationEnabled ? x * y * -0.035 : 0;
 
-    // Spring physics — underdamped for a natural slight overshoot
-    const stiffness = 9;
-    const damping = 4.2;
-    const s = springRef.current;
-
-    s.vpx += (tpx - s.px) * stiffness * dt - s.vpx * damping * dt;
-    s.px += s.vpx * dt;
-    s.vpy += (tpy - s.py) * stiffness * dt - s.vpy * damping * dt;
-    s.py += s.vpy * dt;
-    s.vpz += (tpz - s.pz) * stiffness * dt - s.vpz * damping * dt;
-    s.pz += s.vpz * dt;
-    s.vrx += (trx - s.rx) * stiffness * dt - s.vrx * damping * dt;
-    s.rx += s.vrx * dt;
-    s.vry += (tRY - s.ry) * stiffness * dt - s.vry * damping * dt;
-    s.ry += s.vry * dt;
-    s.vrz += (trz - s.rz) * stiffness * dt - s.vrz * damping * dt;
-    s.rz += s.vrz * dt;
+    const s = smoothRef.current;
+    s.px += (tpx - s.px) * alpha;
+    s.py += (tpy - s.py) * alpha;
+    s.pz += (tpz - s.pz) * alpha;
+    s.rx += (trx - s.rx) * alpha;
+    s.ry += (tRY - s.ry) * alpha;
+    s.rz += (trz - s.rz) * alpha;
 
     groupRef.current.position.set(s.px, s.py, s.pz);
     groupRef.current.rotation.set(s.rx, s.ry, s.rz);
