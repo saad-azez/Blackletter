@@ -633,9 +633,17 @@ export function CastleScene({
   useEffect(() => {
     const element = sectionRef.current;
 
+    console.log('[CastleScene] pointer effect — element:', element, 'tagName:', element?.tagName, 'className:', element?.className);
+
     if (!element) {
+      console.warn('[CastleScene] sectionRef is null — no pointer listeners attached');
       return undefined;
     }
+
+    const bounds0 = element.getBoundingClientRect();
+    console.log('[CastleScene] element bounds on mount:', { width: bounds0.width, height: bounds0.height, top: bounds0.top, left: bounds0.left });
+
+    let moveCount = 0;
 
     const resetPointer = () => {
       pointerTarget.current.set(0, 0);
@@ -643,8 +651,14 @@ export function CastleScene({
 
     const updatePointer = (event: PointerEvent) => {
       const bounds = element.getBoundingClientRect();
+      moveCount += 1;
+
+      if (moveCount <= 3) {
+        console.log(`[CastleScene] pointermove #${moveCount} — clientXY:(${event.clientX},${event.clientY}) bounds:(w:${bounds.width} h:${bounds.height} l:${bounds.left} t:${bounds.top})`);
+      }
 
       if (!bounds.width || !bounds.height) {
+        console.warn('[CastleScene] pointermove — zero bounds, resetting pointer');
         resetPointer();
         return;
       }
@@ -675,6 +689,8 @@ export function CastleScene({
     window.addEventListener('blur', resetPointer);
     window.addEventListener('deviceorientation', handleOrientation, { passive: true });
     document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    console.log('[CastleScene] pointermove listener attached to:', element.tagName, element.className);
 
     return () => {
       element.removeEventListener('pointermove', updatePointer);
