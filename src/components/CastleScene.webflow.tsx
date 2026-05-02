@@ -3,6 +3,7 @@ import { declareComponent } from '@webflow/react';
 
 import { CastleScene } from './CastleScene';
 
+
 const castleSceneWebflow = declareComponent(CastleScene, {
   name: 'Castle Scene',
   description: 'A Castle-specific scene component with a fixed, non-interactive camera.',
@@ -36,6 +37,11 @@ const castleSceneWebflow = declareComponent(CastleScene, {
       defaultValue: true,
       trueLabel: 'On',
       falseLabel: 'Off',
+    }),
+    paperEffect: props.Text({
+      name: 'Paper Exit Effect',
+      defaultValue: 'corner-peel',
+      tooltip: 'Controls the scroll exit animation. Values: corner-peel, diagonal-wipe, none',
     }),
   },
 });
