@@ -1,13 +1,29 @@
 import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 
-import parchmentUrl from '../assets/Textures/parchment back-blac 1.png';
-
 export type PaperExitVariant = 'corner-peel' | 'diagonal-wipe';
 
 interface PaperExitEffectProps {
   sectionRef: RefObject<HTMLElement | null>;
   variant?: PaperExitVariant;
+}
+
+function readCSSColor(cssVar: string, fallback: string): string {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(cssVar).trim();
+  if (!raw) return fallback;
+  if (/^#[0-9A-Fa-f]{3,8}$/.test(raw)) return raw;
+  try {
+    const el = document.createElement('div');
+    document.head.appendChild(el);
+    el.style.color = raw;
+    const rgb = getComputedStyle(el).color;
+    document.head.removeChild(el);
+    const m = rgb.match(/(\d+)/g);
+    if (m && m.length >= 3) {
+      return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
+    }
+  } catch (_) {}
+  return fallback;
 }
 
 export function PaperExitEffect({ sectionRef, variant = 'corner-peel' }: PaperExitEffectProps) {
@@ -17,16 +33,8 @@ export function PaperExitEffect({ sectionRef, variant = 'corner-peel' }: PaperEx
     if (!canvasRef.current) return;
     const canvas: HTMLCanvasElement = canvasRef.current;
 
-    let texture: HTMLImageElement | null = null;
     let raf: number | null = null;
     let container: Element | null = null;
-
-    const img = new Image();
-    img.src = parchmentUrl;
-    img.onload = () => {
-      texture = img;
-      schedule();
-    };
 
     // Walk up the DOM to find the nearest ancestor with non-zero layout height.
     // In Webflow the component's own section reports height:0 (CSS override),
@@ -50,6 +58,10 @@ export function PaperExitEffect({ sectionRef, variant = 'corner-peel' }: PaperEx
     }
     resize();
 
+    function schedule() {
+      if (raf === null) raf = requestAnimationFrame(render);
+    }
+
     function render() {
       raf = null;
       const ctx = canvas.getContext('2d');
@@ -65,14 +77,14 @@ export function PaperExitEffect({ sectionRef, variant = 'corner-peel' }: PaperEx
       const bottom = container.getBoundingClientRect().bottom;
 
       // t = 0 → no paper, t = 1 → full screen covered
-      // Effect spans the last 1.2 viewport-heights of the section's scroll.
-      const triggerRange = vh * 1.2;
+      // Start the moment the section's bottom edge hits the viewport bottom
+      // (rocks visible at viewport bottom). Paper sweeps over the castle scene.
+      const triggerRange = vh;
       let t: number;
       let globalAlpha = 1;
 
       if (bottom < 0) {
-        // Section has fully scrolled past. Fade the paper out quickly so
-        // makers-section is not obscured.
+        // Section has fully scrolled past — fade the paper out so makers-section shows.
         t = 1;
         globalAlpha = Math.max(0, 1 + bottom / (vh * 0.35));
       } else {
@@ -81,14 +93,12 @@ export function PaperExitEffect({ sectionRef, variant = 'corner-peel' }: PaperEx
 
       if (t <= 0 || globalAlpha <= 0) return;
 
+      const paperColor = readCSSColor('--paper-color-two', '#ffffff');
+
       ctx.save();
       ctx.globalAlpha = globalAlpha;
-      paintPaper(ctx, vw, vh, t, texture, variant);
+      paintPaper(ctx, vw, vh, t, paperColor, variant);
       ctx.restore();
-    }
-
-    function schedule() {
-      if (raf === null) raf = requestAnimationFrame(render);
     }
 
     function onResize() {
@@ -135,15 +145,24 @@ interface FoldEndpoints {
 }
 
 // Returns the two screen-edge endpoints of the fold line at coverage t.
-// Phase 1 (t ≤ 0.5): line sweeps from the BR corner outward along bottom + right edges.
-// Phase 2 (t > 0.5): line continues across from left edge to top edge.
+//
+// d = (vw + vh) * (1 - t) is the "wave distance" from the TL corner along the
+// diagonal. Three phases track which pair of edges the fold line intersects,
+// with natural breakpoints at t = vh/(vw+vh) and t = vw/(vw+vh) so the line
+// moves continuously with no jumps as t goes 0 → 1.
+//
+// Phase A (t ≤ vh/(vw+vh)): right edge → bottom edge   (triangle from BR)
+// Phase B (             ): top edge  → bottom edge   (quad, crossing screen)
+// Phase C (t > vw/(vw+vh)): top edge  → left edge    (pentagon toward TL)
 function getFoldLine(vw: number, vh: number, t: number): FoldEndpoints {
-  if (t <= 0.5) {
-    const s = t * 2;
-    return { x1: vw * (1 - s), y1: vh, x2: vw, y2: vh * (1 - s) };
+  const d = (vw + vh) * (1 - t);
+  if (t <= vh / (vw + vh)) {
+    return { x1: vw, y1: d - vw, x2: d - vh, y2: vh };
   }
-  const s = (t - 0.5) * 2;
-  return { x1: 0, y1: vh * (1 - s), x2: vw * s, y2: 0 };
+  if (t <= vw / (vw + vh)) {
+    return { x1: d, y1: 0, x2: d - vh, y2: vh };
+  }
+  return { x1: d, y1: 0, x2: 0, y2: d };
 }
 
 // Adds the paper polygon to the current path (does not stroke/fill).
@@ -153,22 +172,25 @@ function buildPaperPath(
   vh: number,
   t: number,
 ) {
+  const d = (vw + vh) * (1 - t);
   ctx.beginPath();
-  if (t <= 0.5) {
-    const s = t * 2;
-    ctx.moveTo(vw * (1 - s), vh); // bottom edge
-    ctx.lineTo(vw, vh);            // BR corner
-    ctx.lineTo(vw, vh * (1 - s)); // right edge
-    ctx.closePath();
+  if (t <= vh / (vw + vh)) {
+    ctx.moveTo(vw, d - vw);  // right edge
+    ctx.lineTo(vw, vh);       // BR corner
+    ctx.lineTo(d - vh, vh);   // bottom edge
+  } else if (t <= vw / (vw + vh)) {
+    ctx.moveTo(d, 0);         // top edge
+    ctx.lineTo(vw, 0);        // TR corner
+    ctx.lineTo(vw, vh);       // BR corner
+    ctx.lineTo(d - vh, vh);   // bottom edge
   } else {
-    const s = (t - 0.5) * 2;
-    ctx.moveTo(0, vh * (1 - s));  // left edge
-    ctx.lineTo(0, vh);             // BL corner
-    ctx.lineTo(vw, vh);            // BR corner
-    ctx.lineTo(vw, 0);             // TR corner
-    ctx.lineTo(vw * s, 0);         // top edge
-    ctx.closePath();
+    ctx.moveTo(d, 0);         // top edge
+    ctx.lineTo(vw, 0);        // TR corner
+    ctx.lineTo(vw, vh);       // BR corner
+    ctx.lineTo(0, vh);        // BL corner
+    ctx.lineTo(0, d);         // left edge
   }
+  ctx.closePath();
 }
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
@@ -178,7 +200,7 @@ function paintPaper(
   vw: number,
   vh: number,
   t: number,
-  texture: HTMLImageElement | null,
+  paperColor: string,
   variant: PaperExitVariant,
 ) {
   const { x1, y1, x2, y2 } = getFoldLine(vw, vh, t);
@@ -204,40 +226,33 @@ function paintPaper(
   buildPaperPath(ctx, vw, vh, t);
   ctx.clip();
 
-  // Parchment texture fill
-  if (texture && texture.naturalWidth > 0) {
-    const scale = Math.min(vw, vh) / texture.naturalWidth * 0.85;
-    const pat = ctx.createPattern(texture, 'repeat');
-    if (pat) {
-      pat.setTransform(new DOMMatrix([scale, 0, 0, scale, 0, 0]));
-      ctx.fillStyle = pat;
-    } else {
-      ctx.fillStyle = '#c9a479';
-    }
-  } else {
-    ctx.fillStyle = '#c9a479';
-  }
+  ctx.fillStyle = paperColor;
   ctx.fillRect(0, 0, vw, vh);
 
-  // Inner-edge shading: darkens the paper near the fold to sell the curl/lift
   if (variant === 'corner-peel') {
-    const inDepth = diag * 0.10;
-    const innerGrad = ctx.createLinearGradient(
+    // Back face of the peeled page — the paper curls outward so you see its
+    // underside at the fold edge as a wide dark strip fading inward.
+    const backFaceDepth = diag * 0.07;
+    const backFaceGrad = ctx.createLinearGradient(
       mx, my,
-      mx + inX * inDepth, my + inY * inDepth,
+      mx + inX * backFaceDepth, my + inY * backFaceDepth,
     );
-    innerGrad.addColorStop(0, 'rgba(0,0,0,0.32)');
-    innerGrad.addColorStop(0.45, 'rgba(0,0,0,0.10)');
-    innerGrad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = innerGrad;
+    backFaceGrad.addColorStop(0,    'rgba(0,0,0,0.65)');
+    backFaceGrad.addColorStop(0.35, 'rgba(0,0,0,0.22)');
+    backFaceGrad.addColorStop(1,    'rgba(0,0,0,0)');
+    ctx.fillStyle = backFaceGrad;
     ctx.fillRect(0, 0, vw, vh);
 
-    // Thin dark "back-of-page" strip right at the fold edge
-    const backDepth = diag * 0.018;
-    const backGrad = ctx.createLinearGradient(mx, my, mx + inX * backDepth, my + inY * backDepth);
-    backGrad.addColorStop(0, 'rgba(20,12,5,0.55)');
-    backGrad.addColorStop(1, 'rgba(20,12,5,0)');
-    ctx.fillStyle = backGrad;
+    // Subtle light sheen on the front face just past the back face strip.
+    const sheenDepth = diag * 0.18;
+    const sheenGrad = ctx.createLinearGradient(
+      mx, my,
+      mx + inX * sheenDepth, my + inY * sheenDepth,
+    );
+    sheenGrad.addColorStop(0,    'rgba(255,255,255,0)');
+    sheenGrad.addColorStop(0.10, 'rgba(255,255,255,0.09)');
+    sheenGrad.addColorStop(0.45, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sheenGrad;
     ctx.fillRect(0, 0, vw, vh);
   }
 
@@ -276,8 +291,8 @@ function paintPaper(
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
-    ctx.strokeStyle = 'rgba(255,248,220,0.70)';
-    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = 3;
     ctx.stroke();
     ctx.restore();
   }
