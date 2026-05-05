@@ -168,23 +168,6 @@ function ScenePage({ debug, scene }: { debug: boolean; scene: SceneRoute }) {
           <ChessScene animationEnabled modelScale={1} showGui={debug} />
         )}
       </Suspense>
-      {scene === 'castle' && (
-        <div
-          style={{
-            alignItems: 'center',
-            color: 'rgba(245,239,229,0.5)',
-            display: 'flex',
-            fontFamily: '"Iowan Old Style", "Palatino Linotype", serif',
-            fontSize: '1.5rem',
-            justifyContent: 'center',
-            letterSpacing: '0.08em',
-            minHeight: '200vh',
-            textTransform: 'uppercase',
-          }}
-        >
-          makers-section (local preview placeholder)
-        </div>
-      )}
     </div>
   );
 }

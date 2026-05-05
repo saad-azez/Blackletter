@@ -10,7 +10,6 @@ import gsap from 'gsap';
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 
-import { PaperExitEffect, type PaperExitVariant } from './PaperExitEffect';
 
 import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.png';
 import rocksTextureUrl from '../assets/Textures/rocks.png';
@@ -66,7 +65,6 @@ export interface CastleSceneProps {
   cameraZ?: number;
   animationEnabled?: boolean;
   modelUrl?: string;
-  paperEffect?: PaperExitVariant | 'none';
   rocksImageUrl?: string;
   showGui?: boolean;
   skyTextureUrl?: string;
@@ -540,7 +538,6 @@ export function CastleScene({
   cameraY = castlePerspectiveCamera.position.y,
   cameraZ = castlePerspectiveCamera.position.z,
   animationEnabled = true,
-  paperEffect = 'corner-peel',
   rocksImageUrl = '',
   showGui = false,
   skyTextureUrl = '',
@@ -1495,9 +1492,6 @@ export function CastleScene({
           zIndex: 4,
         }}
       />
-      {paperEffect !== 'none' ? (
-        <PaperExitEffect sectionRef={sectionRef} variant={paperEffect} />
-      ) : null}
     </section>
   );
 }
