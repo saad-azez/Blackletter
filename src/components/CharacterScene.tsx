@@ -14,6 +14,8 @@ import {
 import * as THREE from 'three';
 
 import charactersBackgroundTextureUrl from '../assets/Textures/characters-background.jpeg';
+import charactersMobileBackgroundUrl from '../assets/Textures/character-scene(mob).jpg';
+import charactersTabletBackgroundUrl from '../assets/Textures/character-scene(tab).jpg';
 import {
   backCharacterTransformDefaults,
   buildingTransformDefaults,
@@ -45,6 +47,7 @@ type CameraMode = (typeof cameraModes)[number];
 export interface CharacterSceneProps {
   animationEnabled?: boolean;
   backCharacterModelUrl?: string;
+  backgroundImageUrl?: string;
   buildingModelUrl?: string;
   cameraX?: number;
   cameraY?: number;
@@ -94,6 +97,7 @@ interface GuiControllers {
 interface PreparedSceneResult {
   root: THREE.Group;
   size: THREE.Vector3;
+  worldScale: number;
 }
 
 interface CharacterStageProps {
@@ -276,6 +280,28 @@ function prepareSceneObject(scene: THREE.Object3D) {
   return root;
 }
 
+function getCharacterWorldScale(
+  size: THREE.Vector3,
+  camera: THREE.Camera,
+  aspectRatio: number,
+  modelScale: number,
+): number {
+  const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : characterPerspectiveCamera.fov;
+  const viewport = getViewportAtDistance(
+    Math.max(characterPerspectiveCamera.position.z - 0.6, 4.5),
+    fov,
+    aspectRatio,
+  );
+  const targetHeight = viewport.height * (aspectRatio < 0.85 ? 0.76 : 0.84);
+  const targetWidth = viewport.width * (aspectRatio < 0.85 ? 0.48 : 0.34);
+  return (
+    Math.min(
+      targetWidth / Math.max(size.x, 0.001),
+      targetHeight / Math.max(size.y, 0.001),
+    ) * modelScale
+  );
+}
+
 function buildPreparedCharacterScene(
   scene: THREE.Object3D,
   camera: THREE.Camera,
@@ -286,19 +312,7 @@ function buildPreparedCharacterScene(
   const bounds = new THREE.Box3().setFromObject(root);
   const center = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
-  const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : characterPerspectiveCamera.fov;
-  const viewport = getViewportAtDistance(
-    Math.max(characterPerspectiveCamera.position.z - 0.6, 4.5),
-    fov,
-    aspectRatio,
-  );
-  const targetHeight = viewport.height * (aspectRatio < 0.85 ? 0.76 : 0.84);
-  const targetWidth = viewport.width * (aspectRatio < 0.85 ? 0.48 : 0.34);
-  const worldScale =
-    Math.min(
-      targetWidth / Math.max(size.x, 0.001),
-      targetHeight / Math.max(size.y, 0.001),
-    ) * modelScale;
+  const worldScale = getCharacterWorldScale(size, camera, aspectRatio, modelScale);
   const baseY = bounds.min.y;
 
   root.scale.setScalar(worldScale);
@@ -308,12 +322,14 @@ function buildPreparedCharacterScene(
   return {
     root,
     size: size.clone().multiplyScalar(worldScale),
+    worldScale,
   };
 }
 
 export function CharacterScene({
   animationEnabled = true,
   backCharacterModelUrl = '',
+  backgroundImageUrl = '',
   buildingModelUrl = '',
   cameraX = characterPerspectiveCamera.position.x,
   cameraY = characterPerspectiveCamera.position.y,
@@ -332,6 +348,7 @@ export function CharacterScene({
   const resolvedBackCharacterModelUrl =
     toText(backCharacterModelUrl).trim() || defaultBackCharacterModelUrl;
   const resolvedBuildingModelUrl = toText(buildingModelUrl).trim() || defaultBuildingModelUrl;
+  const resolvedBackgroundImageUrl = toText(backgroundImageUrl).trim();
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
     x: clampCameraAxis('x', toNumber(cameraX, characterPerspectiveCamera.position.x)),
     y: clampCameraAxis('y', toNumber(cameraY, characterPerspectiveCamera.position.y)),
@@ -341,6 +358,7 @@ export function CharacterScene({
   const [orbitEnabled, setOrbitEnabled] = useState(false);
   const [animationActive, setAnimationActive] = useState(animationEnabled);
   const [backgroundEnabled, setBackgroundEnabled] = useState(true);
+  const [viewportSize, setViewportSize] = useState<'mobile' | 'tablet' | 'desktop'>('desktop');
   const [characterTransform, setCharacterTransform] = useState<CharacterTransform>(() =>
     normalizeCharacterTransform({ ...characterTransformDefaults }),
   );
@@ -374,6 +392,29 @@ export function CharacterScene({
   useEffect(() => {
     setAnimationActive(animationEnabled);
   }, [animationEnabled]);
+
+  useEffect(() => {
+    const element = sectionRef.current;
+    if (!element) return;
+
+    const updateViewportSize = (width: number) => {
+      if (width <= 767) setViewportSize('mobile');
+      else if (width <= 1024) setViewportSize('tablet');
+      else setViewportSize('desktop');
+    };
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) updateViewportSize(entry.contentRect.width);
+    });
+
+    observer.observe(element);
+    updateViewportSize(element.getBoundingClientRect().width);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     setCameraTarget(defaultCameraTarget);
@@ -1066,14 +1107,32 @@ export function CharacterScene({
     <section
       className="scene-viewport"
       ref={sectionRef}
-      style={{
-        backgroundColor: '#ffffff',
-        backgroundImage: backgroundEnabled ? `url(${charactersBackgroundTextureUrl})` : 'none',
-        backgroundPosition: 'center center',
-        backgroundRepeat: 'no-repeat',
-        backgroundSize: 'cover',
-      }}
+      style={{ backgroundColor: '#ffffff' }}
     >
+      {backgroundEnabled ? (
+        <img
+          aria-hidden="true"
+          alt=""
+          src={
+            resolvedBackgroundImageUrl ||
+            (viewportSize === 'mobile' ? charactersMobileBackgroundUrl :
+             viewportSize === 'tablet' ? charactersTabletBackgroundUrl :
+             charactersBackgroundTextureUrl)
+          }
+          decoding="async"
+          loading="eager"
+          style={{
+            height: '100%',
+            inset: 0,
+            objectFit: 'cover',
+            objectPosition: 'center center',
+            pointerEvents: 'none',
+            position: 'absolute',
+            userSelect: 'none',
+            width: '100%',
+          }}
+        />
+      ) : null}
       <Canvas
         dpr={[1, 1.25]}
         gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', stencil: false }}
@@ -1159,6 +1218,14 @@ function CharacterStage({
     [camera, characterGltf.scene, modelScale, size.height, size.width],
   );
 
+  const layoutPositionScale = useMemo(() => {
+    if (preparedCharacter.worldScale <= 0 || !Number.isFinite(preparedCharacter.worldScale)) return 1;
+    const modelSize = preparedCharacter.size.clone().divideScalar(preparedCharacter.worldScale);
+    const referenceScale = getCharacterWorldScale(modelSize, camera, 16 / 9, modelScale);
+    if (!Number.isFinite(referenceScale) || referenceScale <= 0) return 1;
+    return Math.min(1, preparedCharacter.worldScale / referenceScale);
+  }, [camera, modelScale, preparedCharacter.size, preparedCharacter.worldScale]);
+
   useEffect(() => {
     onPreparedSizeChange?.(preparedCharacter.size.clone());
   }, [onPreparedSizeChange, preparedCharacter.size]);
@@ -1168,13 +1235,14 @@ function CharacterStage({
   }
 
   return (
-    <group position={[characterTransform.x, characterTransform.y, characterTransform.z]}>
+    <group position={[characterTransform.x * layoutPositionScale, characterTransform.y * layoutPositionScale, characterTransform.z]}>
       <group
-        rotation={[
+        rotation={new THREE.Euler(
           THREE.MathUtils.degToRad(characterTransform.rotationX),
           THREE.MathUtils.degToRad(characterTransform.rotationY),
           THREE.MathUtils.degToRad(characterTransform.rotationZ),
-        ]}
+          'ZYX',
+        )}
         scale={[characterTransform.scale, characterTransform.scale, characterTransform.scale]}
       >
         <primitive object={preparedCharacter.root} />
@@ -1216,17 +1284,17 @@ function CharacterSceneGroup({
 
     const { x, y } = pointerTarget.current;
 
-    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.12, 3.2, delta);
-    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.06, 3.2, delta);
+    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.16, 3.2, delta);
+    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.08, 3.2, delta);
     groupRef.current.position.z = THREE.MathUtils.damp(
       groupRef.current.position.z,
-      -Math.abs(x) * 0.04 - Math.abs(y) * 0.03,
+      -Math.abs(x) * 0.05 - Math.abs(y) * 0.03,
       3,
       delta,
     );
-    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.06, 3.4, delta);
-    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.12, 3.4, delta);
-    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.03, 3.2, delta);
+    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.08, 3.4, delta);
+    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.16, 3.4, delta);
+    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.035, 3.2, delta);
   });
 
   return (

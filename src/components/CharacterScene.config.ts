@@ -64,35 +64,35 @@ export const characterCameraAxisControls = {
 
 export const characterTransformDefaults = {
   rotationX: 0,
-  rotationY: -60,
+  rotationY: 60,
   rotationZ: 0,
   scale: 1,
   visible: true,
-  x: -2.05,
-  y: -0.95,
+  x: -1.15,
+  y: -1.05,
   z: 0,
 } as const satisfies CharacterTransform;
 
 export const backCharacterTransformDefaults = {
-  rotationX: -2.13,
+  rotationX: -2,
   rotationY: -120,
-  rotationZ: 0,
+  rotationZ: -10,
   scale: 0.41,
   visible: true,
   x: 2.07,
-  y: 1.52,
+  y: -1.7,
   z: -2.13,
 } as const satisfies CharacterTransform;
 
 export const buildingTransformDefaults = {
   rotationX: 0,
-  rotationY: -60,
-  rotationZ: 0,
-  scale: 0.72,
+  rotationY: 20,
+  rotationZ: -5,
+  scale: 1,
   visible: true,
-  x: -0.8,
-  y: -0.95,
-  z: -1.1,
+  x: -2,
+  y: 0.9,
+  z: -1,
 } as const satisfies CharacterTransform;
 
 export const scenePositionAxisControls = {
