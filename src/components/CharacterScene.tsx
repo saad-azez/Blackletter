@@ -9,13 +9,13 @@ import {
   useMemo,
   useRef,
   useState,
-  type MutableRefObject,
+  type RefObject,
 } from 'react';
 import * as THREE from 'three';
 
 import charactersBackgroundTextureUrl from '../assets/Textures/characters-background.jpeg';
-import charactersMobileBackgroundUrl from '../assets/Textures/character-scene(mob).jpg';
-import charactersTabletBackgroundUrl from '../assets/Textures/character-scene(tab).jpg';
+import charactersMobileBackgroundUrl from '../assets/Textures/characters-background-mobile.png';
+import charactersTabletBackgroundUrl from '../assets/Textures/characters-background-tablet.jpg';
 import {
   backCharacterTransformDefaults,
   buildingTransformDefaults,
@@ -105,6 +105,7 @@ interface CharacterStageProps {
   characterTransform: CharacterTransform;
   modelScale: number;
   onPreparedSizeChange?: (size: THREE.Vector3) => void;
+  scalePositions?: boolean;
 }
 
 interface CharacterSceneCameraProps {
@@ -121,7 +122,8 @@ interface CharacterSceneGroupProps {
   characterTransform: CharacterTransform;
   modelScale: number;
   onPreparedSizeChange: (size: THREE.Vector3) => void;
-  pointerTarget: MutableRefObject<THREE.Vector2>;
+  pointerTarget: RefObject<THREE.Vector2>;
+  viewport: 'mobile' | 'tablet' | 'desktop';
 }
 
 function toText(value: unknown) {
@@ -1103,36 +1105,26 @@ export function CharacterScene({
     orbitEnabled,
   ]);
 
+  const activeBackgroundUrl =
+    resolvedBackgroundImageUrl ||
+    (viewportSize === 'mobile' ? charactersMobileBackgroundUrl :
+     viewportSize === 'tablet' ? charactersTabletBackgroundUrl :
+     charactersBackgroundTextureUrl);
+
   return (
     <section
       className="scene-viewport"
+      data-viewport={viewportSize}
       ref={sectionRef}
-      style={{ backgroundColor: '#ffffff' }}
+      style={{
+        backgroundColor: '#ffffff',
+        backgroundImage: backgroundEnabled ? `url(${activeBackgroundUrl})` : 'none',
+        backgroundPosition: viewportSize === 'mobile' ? 'right top' : 'center center',
+        backgroundRepeat: 'no-repeat',
+        backgroundSize: 'cover',
+        height: viewportSize !== 'desktop' ? '100vh' : undefined,
+      }}
     >
-      {backgroundEnabled ? (
-        <img
-          aria-hidden="true"
-          alt=""
-          src={
-            resolvedBackgroundImageUrl ||
-            (viewportSize === 'mobile' ? charactersMobileBackgroundUrl :
-             viewportSize === 'tablet' ? charactersTabletBackgroundUrl :
-             charactersBackgroundTextureUrl)
-          }
-          decoding="async"
-          loading="eager"
-          style={{
-            height: '100%',
-            inset: 0,
-            objectFit: 'cover',
-            objectPosition: 'center center',
-            pointerEvents: 'none',
-            position: 'absolute',
-            userSelect: 'none',
-            width: '100%',
-          }}
-        />
-      ) : null}
       <Canvas
         dpr={[1, 1.25]}
         gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', stencil: false }}
@@ -1166,11 +1158,14 @@ export function CharacterScene({
             />
           </Suspense>
         ) : null}
-        <CharacterStage
-          characterModelUrl={resolvedBackCharacterModelUrl}
-          characterTransform={backCharacterTransform}
-          modelScale={modelScale}
-        />
+        {viewportSize !== 'mobile' && (
+          <CharacterStage
+            characterModelUrl={resolvedBackCharacterModelUrl}
+            characterTransform={backCharacterTransform}
+            modelScale={modelScale}
+            scalePositions={viewportSize !== 'desktop'}
+          />
+        )}
         <CharacterSceneGroup
           animationEnabled={animationActive}
           buildingModelUrl={resolvedBuildingModelUrl}
@@ -1180,6 +1175,7 @@ export function CharacterScene({
           modelScale={modelScale}
           onPreparedSizeChange={setPreparedSceneSize}
           pointerTarget={pointerTarget}
+          viewport={viewportSize}
         />
       </Canvas>
       {showGui ? (
@@ -1203,6 +1199,7 @@ function CharacterStage({
   characterTransform,
   modelScale,
   onPreparedSizeChange,
+  scalePositions = false,
 }: CharacterStageProps) {
   const { camera, size } = useThree();
   const characterGltf = useGLTF(characterModelUrl, dracoDecoderPath);
@@ -1234,8 +1231,10 @@ function CharacterStage({
     return null;
   }
 
+  const posScale = scalePositions ? layoutPositionScale : 1;
+
   return (
-    <group position={[characterTransform.x * layoutPositionScale, characterTransform.y * layoutPositionScale, characterTransform.z]}>
+    <group position={[characterTransform.x * posScale, characterTransform.y * posScale, characterTransform.z]}>
       <group
         rotation={new THREE.Euler(
           THREE.MathUtils.degToRad(characterTransform.rotationX),
@@ -1260,6 +1259,7 @@ function CharacterSceneGroup({
   modelScale,
   onPreparedSizeChange,
   pointerTarget,
+  viewport,
 }: CharacterSceneGroupProps) {
   const groupRef = useRef<THREE.Group>(null);
 
@@ -1297,18 +1297,25 @@ function CharacterSceneGroup({
     groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.035, 3.2, delta);
   });
 
+  const isMobile = viewport === 'mobile';
+  const scalePositions = viewport !== 'desktop';
+
   return (
     <group ref={groupRef}>
-      <CharacterStage
-        characterModelUrl={buildingModelUrl}
-        characterTransform={buildingTransform}
-        modelScale={modelScale}
-      />
+      {!isMobile && (
+        <CharacterStage
+          characterModelUrl={buildingModelUrl}
+          characterTransform={buildingTransform}
+          modelScale={modelScale}
+          scalePositions={scalePositions}
+        />
+      )}
       <CharacterStage
         characterModelUrl={characterModelUrl}
-        characterTransform={characterTransform}
+        characterTransform={isMobile ? { ...characterTransform, x: -0.6, y: -1.5, z: 1.5 } : characterTransform}
         modelScale={modelScale}
         onPreparedSizeChange={onPreparedSizeChange}
+        scalePositions={scalePositions}
       />
     </group>
   );
