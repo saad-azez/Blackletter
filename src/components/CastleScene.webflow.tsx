@@ -38,11 +38,6 @@ const castleSceneWebflow = declareComponent(CastleScene, {
       trueLabel: 'On',
       falseLabel: 'Off',
     }),
-    paperEffect: props.Text({
-      name: 'Paper Exit Effect',
-      defaultValue: 'corner-peel',
-      tooltip: 'Controls the scroll exit animation. Values: corner-peel, diagonal-wipe, none',
-    }),
   },
 });
 
