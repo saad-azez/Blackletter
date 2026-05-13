@@ -21,25 +21,20 @@ const characterSceneWebflow = declareComponent(CharacterScene, {
       defaultValue: '',
       tooltip: 'Paste the public URL for the back character .glb file.',
     }),
+    entranceImageX: props.Number({
+      name: 'Entrance X (image fraction)',
+      defaultValue: 0.87,
+      tooltip: 'Horizontal center of the arch entrance as a fraction of the background image width (0 = left edge, 1 = right edge). Default 0.87 targets the arch in the default background.',
+    }),
     buildingModelUrl: props.Text({
       name: 'Building GLB URL',
       defaultValue: '',
       tooltip: 'Paste the public URL for the building .glb file.',
     }),
     backgroundImageUrl: props.Text({
-      name: 'Background Image URL (Desktop)',
+      name: 'Background Image URL',
       defaultValue: '',
-      tooltip: 'Paste the public URL for the desktop background image.',
-    }),
-    backgroundTabletImageUrl: props.Text({
-      name: 'Background Image URL (Tablet)',
-      defaultValue: '',
-      tooltip: 'Paste the public URL for the tablet background image (768–1024px).',
-    }),
-    backgroundMobileImageUrl: props.Text({
-      name: 'Background Image URL (Mobile)',
-      defaultValue: '',
-      tooltip: 'Paste the public URL for the mobile background image (767px and below).',
+      tooltip: 'Paste the public URL for the background image. It will cover the full scene at all screen sizes.',
     }),
     animationEnabled: props.Boolean({
       name: 'Pointer Drift',

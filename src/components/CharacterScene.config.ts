@@ -79,19 +79,52 @@ export const backCharacterTransformDefaults = {
   rotationZ: -10,
   scale: 0.41,
   visible: true,
-  x: 2.07,
+  x: 3.6,
   y: -1.7,
   z: -2.13,
 } as const satisfies CharacterTransform;
 
-export const buildingTransformDefaults = {
+export const backCharacterTransformTabletDefaults = {
+  rotationX: -2,
+  rotationY: -120,
+  rotationZ: -10,
+  scale: 0.41,
+  visible: true,
+  x: 2.8,
+  y: -1.7,
+  z: -2.13,
+} as const satisfies CharacterTransform;
+
+export const backCharacterTransformMobileDefaults = {
+  rotationX: -2,
+  rotationY: -120,
+  rotationZ: -10,
+  scale: 0.55,
+  visible: true,
+  x: 1.3,
+  y: -1.5,
+  z: -1.5,
+} as const satisfies CharacterTransform;
+
+export const characterTransformMobileDefaults = {
   rotationX: 0,
-  rotationY: 20,
-  rotationZ: -5,
+  rotationY: 60,
+  rotationZ: 0,
   scale: 1,
   visible: true,
-  x: -2,
-  y: 0.9,
+  x: -0.6,
+  y: -1.5,
+  z: 1.5,
+} as const satisfies CharacterTransform;
+
+export const buildingTransformDefaults = {
+  rotationX: 0,
+  rotationY: 15,
+  rotationZ: -22,
+  scale: 1,
+  visible: true,
+  x: -2.5,
+  y: -2,
   z: -1,
 } as const satisfies CharacterTransform;
 
