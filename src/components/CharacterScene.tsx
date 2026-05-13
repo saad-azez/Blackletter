@@ -1237,7 +1237,7 @@ export function CharacterScene({
           modelScale={modelScale}
           scalePositions={false}
           screenX={0.08}
-          screenYTop={viewportSize !== 'desktop' ? 0.95 : undefined}
+          screenYTop={0.95}
         />
         <CharacterSceneGroup
           animationEnabled={animationActive}

@@ -42,13 +42,6 @@ const characterSceneWebflow = declareComponent(CharacterScene, {
       trueLabel: 'On',
       falseLabel: 'Off',
     }),
-    showGui: props.Boolean({
-      name: 'Debug Controls',
-      defaultValue: false,
-      trueLabel: 'On',
-      falseLabel: 'Off',
-      tooltip: 'Turn on to show position/rotation sliders for tuning the scene. Turn off before publishing.',
-    }),
   },
 });
 
