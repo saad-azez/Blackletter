@@ -27,9 +27,19 @@ const characterSceneWebflow = declareComponent(CharacterScene, {
       tooltip: 'Paste the public URL for the building .glb file.',
     }),
     backgroundImageUrl: props.Text({
-      name: 'Background Image URL',
+      name: 'Background Image URL (Desktop)',
       defaultValue: '',
-      tooltip: 'Paste the public URL for the background image.',
+      tooltip: 'Paste the public URL for the desktop background image.',
+    }),
+    backgroundTabletImageUrl: props.Text({
+      name: 'Background Image URL (Tablet)',
+      defaultValue: '',
+      tooltip: 'Paste the public URL for the tablet background image (768–1024px).',
+    }),
+    backgroundMobileImageUrl: props.Text({
+      name: 'Background Image URL (Mobile)',
+      defaultValue: '',
+      tooltip: 'Paste the public URL for the mobile background image (767px and below).',
     }),
     animationEnabled: props.Boolean({
       name: 'Pointer Drift',

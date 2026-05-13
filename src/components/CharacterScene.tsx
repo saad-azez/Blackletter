@@ -48,6 +48,8 @@ export interface CharacterSceneProps {
   animationEnabled?: boolean;
   backCharacterModelUrl?: string;
   backgroundImageUrl?: string;
+  backgroundMobileImageUrl?: string;
+  backgroundTabletImageUrl?: string;
   buildingModelUrl?: string;
   cameraX?: number;
   cameraY?: number;
@@ -332,6 +334,8 @@ export function CharacterScene({
   animationEnabled = true,
   backCharacterModelUrl = '',
   backgroundImageUrl = '',
+  backgroundMobileImageUrl = '',
+  backgroundTabletImageUrl = '',
   buildingModelUrl = '',
   cameraX = characterPerspectiveCamera.position.x,
   cameraY = characterPerspectiveCamera.position.y,
@@ -351,6 +355,8 @@ export function CharacterScene({
     toText(backCharacterModelUrl).trim() || defaultBackCharacterModelUrl;
   const resolvedBuildingModelUrl = toText(buildingModelUrl).trim() || defaultBuildingModelUrl;
   const resolvedBackgroundImageUrl = toText(backgroundImageUrl).trim();
+  const resolvedBackgroundMobileImageUrl = toText(backgroundMobileImageUrl).trim();
+  const resolvedBackgroundTabletImageUrl = toText(backgroundTabletImageUrl).trim();
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
     x: clampCameraAxis('x', toNumber(cameraX, characterPerspectiveCamera.position.x)),
     y: clampCameraAxis('y', toNumber(cameraY, characterPerspectiveCamera.position.y)),
@@ -1106,10 +1112,11 @@ export function CharacterScene({
   ]);
 
   const activeBackgroundUrl =
-    resolvedBackgroundImageUrl ||
-    (viewportSize === 'mobile' ? charactersMobileBackgroundUrl :
-     viewportSize === 'tablet' ? charactersTabletBackgroundUrl :
-     charactersBackgroundTextureUrl);
+    viewportSize === 'mobile'
+      ? (resolvedBackgroundMobileImageUrl || resolvedBackgroundImageUrl || charactersMobileBackgroundUrl)
+      : viewportSize === 'tablet'
+        ? (resolvedBackgroundTabletImageUrl || resolvedBackgroundImageUrl || charactersTabletBackgroundUrl)
+        : (resolvedBackgroundImageUrl || charactersBackgroundTextureUrl);
 
   return (
     <section
