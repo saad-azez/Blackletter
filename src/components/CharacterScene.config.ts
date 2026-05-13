@@ -118,9 +118,9 @@ export const characterTransformMobileDefaults = {
 } as const satisfies CharacterTransform;
 
 export const buildingTransformDefaults = {
-  rotationX: 0,
+  rotationX: -5,
   rotationY: 15,
-  rotationZ: -22,
+  rotationZ: -12,
   scale: 1,
   visible: true,
   x: -2.5,

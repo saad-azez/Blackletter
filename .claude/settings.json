@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Rename-Item \"d:\\\\blackletter\\\\src\\\\assets\\\\Textures\\\\character-scene\\(mob\\).png\" \"characters-background-mobile.png\")",
+      "PowerShell(Rename-Item \"d:\\\\blackletter\\\\src\\\\assets\\\\Textures\\\\character-scene\\(tab\\).jpg\" \"characters-background-tablet.jpg\")",
+      "Bash(git remote *)",
+      "PowerShell($f = \"d:\\\\blackletter\\\\src\\\\components\\\\BlackletterPaperCurtain.mjs\"; [math]::Round\\(\\(Get-Item $f\\).Length / 1KB, 1\\))",
+      "Bash(git revert *)",
+      "Bash(grep -o '.\\\\{0,80\\\\}characters-background.\\\\{0,80\\\\}' dist/Client/__federation_expose_CharacterScene.js)",
+      "Bash(python3 -c \"from PIL import Image; img = Image.open\\('src/assets/Textures/characters-background.jpeg'\\); print\\(img.size\\)\")",
+      "Bash(python -c \"from PIL import Image; img = Image.open\\('src/assets/Textures/characters-background.jpeg'\\); print\\(img.size\\)\")",
+      "Bash(identify src/assets/Textures/characters-background.jpeg)"
+    ],
+    "additionalDirectories": [
+      "d:\\blackletter\\src\\components"
+    ]
+  }
+}

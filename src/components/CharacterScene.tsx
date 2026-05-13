@@ -1236,8 +1236,8 @@ export function CharacterScene({
           debugLabel="Tower"
           modelScale={modelScale}
           scalePositions={false}
-          screenX={0.08}
-          screenYTop={0.95}
+          screenX={0.0}
+          screenYTop={viewportSize === 'desktop' ? 1.0 : undefined}
         />
         <CharacterSceneGroup
           animationEnabled={animationActive}
