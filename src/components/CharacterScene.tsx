@@ -106,7 +106,6 @@ interface CharacterStageProps {
   bgImageAspect?: number;
   characterModelUrl: string;
   characterTransform: CharacterTransform;
-  debugLabel?: string;
   entranceImageX?: number;
   isRightAnchored?: boolean;
   modelScale: number;
@@ -445,13 +444,7 @@ export function CharacterScene({
     useGLTF.preload(resolvedCharacterModelUrl, dracoDecoderPath);
     useGLTF.preload(resolvedBackCharacterModelUrl, dracoDecoderPath);
     useGLTF.preload(resolvedBuildingModelUrl, dracoDecoderPath);
-    console.log('[CharacterScene] Resolved URLs', {
-      character: resolvedCharacterModelUrl,
-      backCharacter: resolvedBackCharacterModelUrl,
-      building: resolvedBuildingModelUrl,
-      rawBuildingProp: buildingModelUrl,
-    });
-  }, [resolvedBackCharacterModelUrl, resolvedBuildingModelUrl, resolvedCharacterModelUrl, buildingModelUrl]);
+  }, [resolvedBackCharacterModelUrl, resolvedBuildingModelUrl, resolvedCharacterModelUrl]);
 
   useEffect(() => {
     const element = sectionRef.current;
@@ -1233,7 +1226,6 @@ export function CharacterScene({
         <CharacterStage
           characterModelUrl={resolvedBuildingModelUrl}
           characterTransform={buildingTransform}
-          debugLabel="Tower"
           modelScale={modelScale}
           scalePositions={false}
           screenX={0.0}
@@ -1269,7 +1261,6 @@ function CharacterStage({
   bgImageAspect,
   characterModelUrl,
   characterTransform,
-  debugLabel,
   entranceImageX,
   isRightAnchored = false,
   modelScale,
@@ -1280,11 +1271,6 @@ function CharacterStage({
 }: CharacterStageProps) {
   const { camera, size } = useThree();
   const characterGltf = useGLTF(characterModelUrl, dracoDecoderPath);
-
-  useEffect(() => {
-    if (!debugLabel) return;
-    console.log(`[${debugLabel}] GLTF loaded successfully`, { url: characterModelUrl, scene: characterGltf.scene });
-  }, [debugLabel, characterModelUrl, characterGltf.scene]);
 
   const preparedCharacter = useMemo(
     () =>
@@ -1341,14 +1327,6 @@ function CharacterStage({
   useEffect(() => {
     onPreparedSizeChange?.(preparedCharacter.size.clone());
   }, [onPreparedSizeChange, preparedCharacter.size]);
-
-  useEffect(() => {
-    if (!debugLabel) return;
-    const posScale = scalePositions ? Math.min(1, (size.height > 0 ? size.width / size.height : 16 / 9) / (16 / 9)) : 1;
-    const eX = worldX !== null ? worldX : characterTransform.x * posScale;
-    const eY = worldY !== null ? worldY : characterTransform.y;
-    console.log(`[${debugLabel}] visible=${characterTransform.visible} | viewport=${size.width.toFixed(0)}x${size.height.toFixed(0)} | screenX=${screenX} worldX=${worldX?.toFixed(3)} | screenYTop=${screenYTop} worldY=${worldY?.toFixed(3)} | finalPos=(${eX.toFixed(3)}, ${eY.toFixed(3)}, ${characterTransform.z}) | modelSize=${preparedCharacter.size.x.toFixed(3)}x${preparedCharacter.size.y.toFixed(3)}`);
-  }, [debugLabel, characterTransform.visible, characterTransform.x, characterTransform.y, characterTransform.z, screenX, screenYTop, worldX, worldY, size.width, size.height, scalePositions, preparedCharacter.size]);
 
   if (!characterTransform.visible) {
     return null;
