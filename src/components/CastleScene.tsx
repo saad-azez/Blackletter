@@ -633,28 +633,29 @@ export function CastleScene({
   }, [resolvedCastleModelUrl, resolvedFloorModelUrl, resolvedTowerModelUrl]);
 
   useEffect(() => {
-    const button = document.querySelector('.button.hero');
-
-    if (!button) {
+    if (document.body.classList.contains('experience-started')) {
+      gsap.set(skyImageRef.current, { opacity: 1 });
       return undefined;
     }
 
-    const handleClick = () => {
-      if (!skyImageRef.current) {
+    const observer = new MutationObserver(() => {
+      if (!document.body.classList.contains('experience-started')) {
         return;
       }
+
+      observer.disconnect();
 
       gsap.to(skyImageRef.current, {
         opacity: 1,
         duration: 1.5,
         ease: 'power2.inOut',
       });
-    };
+    });
 
-    button.addEventListener('click', handleClick);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
     return () => {
-      button.removeEventListener('click', handleClick);
+      observer.disconnect();
     };
   }, []);
 
