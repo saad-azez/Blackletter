@@ -544,6 +544,7 @@ export function CastleScene({
   towerModelUrl = '',
 }: CastleSceneProps) {
   const sectionRef = useRef<HTMLElement>(null);
+  const skyImageRef = useRef<HTMLImageElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
   const pointerLastMoved = useRef(Date.now());
   const guiRootRef = useRef<HTMLDivElement>(null);
@@ -630,6 +631,32 @@ export function CastleScene({
       useGLTF.preload(resolvedFloorModelUrl, dracoDecoderPath);
     }
   }, [resolvedCastleModelUrl, resolvedFloorModelUrl, resolvedTowerModelUrl]);
+
+  useEffect(() => {
+    const button = document.querySelector('.button.hero');
+
+    if (!button) {
+      return undefined;
+    }
+
+    const handleClick = () => {
+      if (!skyImageRef.current) {
+        return;
+      }
+
+      gsap.to(skyImageRef.current, {
+        opacity: 1,
+        duration: 1.5,
+        ease: 'power2.inOut',
+      });
+    };
+
+    button.addEventListener('click', handleClick);
+
+    return () => {
+      button.removeEventListener('click', handleClick);
+    };
+  }, []);
 
   useEffect(() => {
     const element = sectionRef.current;
@@ -1386,6 +1413,7 @@ export function CastleScene({
   return (
     <section className="castle-scene-shell" ref={sectionRef}>
       <img
+        ref={skyImageRef}
         aria-hidden="true"
         alt=""
         src={resolvedSkyTextureUrl}
@@ -1396,6 +1424,7 @@ export function CastleScene({
           inset: 0,
           objectFit: 'cover',
           objectPosition: 'center top',
+          opacity: 0,
           pointerEvents: 'none',
           position: 'absolute',
           userSelect: 'none',
