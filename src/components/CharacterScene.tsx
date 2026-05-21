@@ -1148,10 +1148,10 @@ export function CharacterScene({
       data-viewport={viewportSize}
       ref={sectionRef}
       style={{
-        backgroundColor: '#ffffff',
-        height: viewportSize === 'desktop' ? '200vh' : '100vh',
+        height: '100%',
         overflow: 'hidden',
         position: 'relative',
+        width: '100%',
       }}
     >
       {backgroundEnabled && (
