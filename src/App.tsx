@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 
 
 const CastleScene = lazy(() => import('./components/CastleScene'));
+const CastleSceneV2 = lazy(() => import('./components/CastleSceneV2'));
 const CharacterScene = lazy(() => import('./components/CharacterScene'));
 const ChessScene = lazy(() => import('./components/ChessScene'));
 const CurtainDemo = lazy(() =>
@@ -323,6 +324,14 @@ function App() {
     return (
       <Suspense fallback={null}>
         <CurtainDemo />
+      </Suspense>
+    );
+  }
+
+  if (normalizePathname(pathname) === '/castle-v2') {
+    return (
+      <Suspense fallback={null}>
+        <CastleSceneV2 modelScale={1} />
       </Suspense>
     );
   }

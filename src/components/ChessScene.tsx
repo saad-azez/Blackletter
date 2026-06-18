@@ -18,7 +18,7 @@ import {
 } from 'react';
 import * as THREE from 'three';
 
-import battlefieldTextureUrl from '../assets/Textures/low_angle_battlefield_depth_of_field_pillars_cinema.jpeg';
+import battlefieldTextureUrl from '../assets/Textures/low_angle_battlefield_depth_of_field_pillars_cinema.webp';
 import {
   chessAmbientIntensityControl,
   chessCameraAxisControls,
@@ -183,6 +183,7 @@ interface ChessBoardSceneProps {
   modelScale: number;
   pieceTransforms: ChessPieceTransform[];
   pointerTarget: MutableRefObject<THREE.Vector2>;
+  scrollTarget: MutableRefObject<number>;
 }
 
 interface ChessSceneCameraProps {
@@ -517,6 +518,12 @@ function shapePointerAxis(value: number) {
   return Math.sign(clampedValue) * Math.pow(Math.abs(clampedValue), 1.2);
 }
 
+// Quantize the aspect ratio used as a memo key so continuous resize does not
+// rebuild (deep-clone) the prepared GLTF scenes on every frame of the gesture.
+function quantizeAspectRatio(value: number) {
+  return Math.round(value * 20) / 20;
+}
+
 function getViewportAtDistance(distance: number, fov: number, aspectRatio: number) {
   const height = 2 * Math.tan(THREE.MathUtils.degToRad(fov) / 2) * distance;
 
@@ -568,7 +575,7 @@ function getWorldScaleForSceneSize(
 }
 
 function getCompactFloorScale(compactLayoutAmount: number) {
-  return THREE.MathUtils.lerp(1, 2.25, compactLayoutAmount);
+  return THREE.MathUtils.lerp(1, 3.5, compactLayoutAmount);
 }
 
 function prepareSceneObject(scene: THREE.Object3D, castShadow: boolean, receiveShadow: boolean) {
@@ -675,6 +682,7 @@ export function ChessScene({
 }: ChessSceneProps) {
   const sectionRef = useRef<HTMLElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
+  const scrollTarget = useRef(0);
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
@@ -696,6 +704,7 @@ export function ChessScene({
   const resolvedChessModelUrl = toText(chessModelUrl).trim() || defaultChessModelUrl;
   const resolvedBackgroundImageUrl = toText(backgroundImageUrl).trim() || battlefieldTextureUrl;
   const [renderSize, setRenderSize] = useState<SceneRenderSize | null>(null);
+  const [frameloop, setFrameloop] = useState<'always' | 'never'>('always');
   const [cameraPosition, setCameraPosition] = useState<SceneCameraPosition>({
     x: clampCameraAxis('x', toNumber(cameraX, chessPerspectiveCamera.position.x)),
     y: clampCameraAxis('y', toNumber(cameraY, chessPerspectiveCamera.position.y)),
@@ -956,6 +965,53 @@ export function ChessScene({
       element.removeEventListener('pointerleave', resetPointer);
       window.removeEventListener('blur', resetPointer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const element = sectionRef.current;
+
+    if (!element) {
+      return undefined;
+    }
+
+    const updateScroll = () => {
+      const rect = element.getBoundingClientRect();
+      scrollTarget.current = Math.max(0, -rect.top) / Math.max(rect.height, 1);
+    };
+
+    updateScroll();
+    window.addEventListener('scroll', updateScroll, { passive: true });
+    window.addEventListener('resize', updateScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', updateScroll);
+      window.removeEventListener('resize', updateScroll);
+    };
+  }, []);
+
+  useEffect(() => {
+    const element = sectionRef.current;
+
+    if (!element || typeof IntersectionObserver === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[entries.length - 1];
+
+        if (entry) {
+          setFrameloop(entry.isIntersecting ? 'always' : 'never');
+        }
+      },
+      { rootMargin: '200px' },
+    );
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
     };
   }, []);
 
@@ -1928,6 +1984,7 @@ export function ChessScene({
       >
         <Canvas
           dpr={[1, 1.25]}
+          frameloop={frameloop}
           gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', stencil: false }}
           onCreated={({ gl }) => {
             gl.setClearColor(0x000000, 0);
@@ -1980,9 +2037,22 @@ export function ChessScene({
             modelScale={modelScale}
             pieceTransforms={pieceTransforms}
             pointerTarget={pointerTarget}
+            scrollTarget={scrollTarget}
           />
         </Canvas>
       </div>
+      <div
+        style={{
+          background: 'linear-gradient(to top, #0a0808 0%, rgba(10, 8, 8, 0.85) 30%, rgba(10, 8, 8, 0.4) 65%, transparent 100%)',
+          bottom: 0,
+          height: '40%',
+          left: 0,
+          pointerEvents: 'none',
+          position: 'absolute',
+          right: 0,
+          zIndex: 2,
+        }}
+      />
       {showGui ? (
         <div
           ref={guiRootRef}
@@ -2002,6 +2072,10 @@ export function ChessScene({
 function ChessLighting({ enabled, floorTransform, sceneLights }: ChessLightingProps) {
   const backLightRef = useRef<THREE.SpotLight>(null);
   const lightTargetRef = useRef<THREE.Object3D>(null);
+  const { size } = useThree();
+  // Smaller shadow maps on small screens: 1024px is visually identical at
+  // mobile sizes and a quarter of the GPU memory/fill cost of 2048px.
+  const shadowMapSize = size.width < 1024 ? 1024 : 2048;
   const backSpotPosition: [number, number, number] = [
     sceneLights.backSpot.x,
     sceneLights.backSpot.y,
@@ -2018,7 +2092,7 @@ function ChessLighting({ enabled, floorTransform, sceneLights }: ChessLightingPr
     backLightRef.current.shadow.normalBias = 0.018;
     backLightRef.current.shadow.radius = 5;
     lightTargetRef.current.updateMatrixWorld();
-  }, [enabled]);
+  }, [enabled, shadowMapSize]);
 
   useEffect(() => {
     if (!enabled) {
@@ -2047,9 +2121,10 @@ function ChessLighting({ enabled, floorTransform, sceneLights }: ChessLightingPr
         castShadow
         color={sceneLights.mainDirectional.color}
         intensity={sceneLights.mainDirectional.intensity}
+        key={`main-directional-${shadowMapSize}`}
         position={[sceneLights.mainDirectional.x, sceneLights.mainDirectional.y, sceneLights.mainDirectional.z]}
-        shadow-mapSize-height={2048}
-        shadow-mapSize-width={2048}
+        shadow-mapSize-height={shadowMapSize}
+        shadow-mapSize-width={shadowMapSize}
       />
       <directionalLight
         color={sceneLights.secondaryDirectional.color}
@@ -2063,12 +2138,13 @@ function ChessLighting({ enabled, floorTransform, sceneLights }: ChessLightingPr
         color={sceneLights.backSpot.color}
         distance={18}
         intensity={sceneLights.backSpot.intensity}
+        key={`back-spot-${shadowMapSize}`}
         penumbra={1}
         position={backSpotPosition}
         shadow-camera-far={28}
         shadow-camera-near={0.5}
-        shadow-mapSize-height={2048}
-        shadow-mapSize-width={2048}
+        shadow-mapSize-height={shadowMapSize}
+        shadow-mapSize-width={shadowMapSize}
       />
       <spotLight
         angle={0.45}
@@ -2188,18 +2264,20 @@ function ChessBoardScene({
   modelScale,
   pieceTransforms,
   pointerTarget,
+  scrollTarget,
 }: ChessBoardSceneProps) {
   const groupRef = useRef<THREE.Group>(null);
+  const scrollSmooth = useRef(0);
   const { size } = useThree();
   const floorGltf = useGLTF(floorModelUrl, dracoDecoderPath);
   const chessGltf = useGLTF(chessModelUrl, dracoDecoderPath);
-  const aspectRatio = size.height > 0 ? size.width / size.height : 1;
+  const aspectRatio = quantizeAspectRatio(size.height > 0 ? size.width / size.height : 1);
   const compactLayoutAmount = getCompactLayoutAmount(size.width, aspectRatio);
   const isMobileLayout = size.width > 0 && size.width < mobileChessBreakpoint;
   const displayFloorTransform = useMemo(
     () => ({
       ...floorTransform,
-      y: floorTransform.y - compactLayoutAmount * 0.42,
+      y: floorTransform.y + compactLayoutAmount * 1.3,
       z: floorTransform.z + compactLayoutAmount * 1.75,
     }),
     [compactLayoutAmount, floorTransform],
@@ -2248,11 +2326,48 @@ function ChessBoardScene({
         .map((piece, index) => ({ index, piece }))
         .filter(({ index, piece }) => piece.visible && (!isMobileLayout || mobileVisiblePieceIndexes.has(index)));
 
-      return visiblePieces.map(({ index, piece }) => ({
-        ...piece,
-        x: piece.x * preparedFloor.footprintWidth * 0.5,
-        z: (isMobileLayout && index === 1 ? 0.1 : piece.z) * preparedFloor.footprintDepth * 0.5,
-      }));
+      return visiblePieces.map(({ index, piece }) => {
+        if (!isMobileLayout) {
+          return {
+            ...piece,
+            x: piece.x * preparedFloor.footprintWidth * 0.5,
+            z: piece.z * preparedFloor.footprintDepth * 0.5,
+          };
+        }
+
+        if (index === 1) {
+          return {
+            ...piece,
+            scale: 1.2,
+            x: 0,
+            z: 0.25 * preparedFloor.footprintDepth * 0.5,
+          };
+        }
+
+        if (index === 4) {
+          return {
+            ...piece,
+            scale: 0.6,
+            x: -0.44 * preparedFloor.footprintWidth * 0.5,
+            z: piece.z * preparedFloor.footprintDepth * 0.5,
+          };
+        }
+
+        if (index === 5) {
+          return {
+            ...piece,
+            scale: 0.6,
+            x: 0.44 * preparedFloor.footprintWidth * 0.5,
+            z: piece.z * preparedFloor.footprintDepth * 0.5,
+          };
+        }
+
+        return {
+          ...piece,
+          x: piece.x * preparedFloor.footprintWidth * 0.5,
+          z: piece.z * preparedFloor.footprintDepth * 0.5,
+        };
+      });
     },
     [
       isMobileLayout,
@@ -2312,28 +2427,31 @@ function ChessBoardScene({
       return;
     }
 
+    scrollSmooth.current = THREE.MathUtils.damp(scrollSmooth.current, scrollTarget.current, 0.8, delta);
+    const sp = scrollSmooth.current;
+
     if (!animationEnabled) {
-      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, 0, 3.2, delta);
-      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, 0, 3.2, delta);
+      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, sp * 0.1, 3.2, delta);
+      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, -sp * 0.28, 3.2, delta);
       groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, 0, 3, delta);
-      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, 0, 3.4, delta);
-      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, 0, 3.4, delta);
+      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, sp * 0.012, 3.4, delta);
+      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, sp * 0.045, 3.4, delta);
       groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, 0, 3.2, delta);
       return;
     }
 
     const { x, y } = pointerTarget.current;
 
-    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.14, 3.2, delta);
-    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.08, 3.2, delta);
+    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.14 + sp * 0.1, 3.2, delta);
+    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.08 - sp * 0.28, 3.2, delta);
     groupRef.current.position.z = THREE.MathUtils.damp(
       groupRef.current.position.z,
       -Math.abs(x) * 0.05 - Math.abs(y) * 0.04,
       3,
       delta,
     );
-    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.05, 3.4, delta);
-    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.08, 3.4, delta);
+    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.05 + sp * 0.012, 3.4, delta);
+    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.08 + sp * 0.045, 3.4, delta);
     groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.025, 3.2, delta);
   });
 

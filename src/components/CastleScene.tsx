@@ -11,8 +11,8 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, 
 import * as THREE from 'three';
 
 
-import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.png';
-import rocksTextureUrl from '../assets/Textures/rocks.png';
+import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.webp';
+import rocksTextureUrl from '../assets/Textures/rocks.webp';
 import {
   castleCameraAxisControls,
   castleFloorTransformDefaults,
@@ -46,7 +46,7 @@ const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7
 const cameraModes = ['Perspective', 'Orthographic'] as const;
 const defaultCastleModelUrl = new URL('../assets/Castle/Castle-Building/castle-building.glb', import.meta.url).href;
 const defaultTowerModelUrl = new URL('../assets/Castle/Tower/Tower.glb', import.meta.url).href;
-const defaultSkyTextureUrl = new URL('../assets/Textures/vortex.jpeg', import.meta.url).href;
+const defaultSkyTextureUrl = new URL('../assets/Textures/vortex.webp', import.meta.url).href;
 const DebugOrbitControls = lazy(() =>
   import('./DebugOrbitControls').then((module) => ({ default: module.DebugOrbitControls })),
 );
@@ -1650,7 +1650,7 @@ function CastleModel({
     };
   }, []);
 
-  useFrame((state, delta) => {
+  useFrame((_state, delta) => {
     if (!groupRef.current) {
       return;
     }
@@ -1660,21 +1660,13 @@ function CastleModel({
 
     const entranceY = entranceActiveRef.current ? entranceRef.current.y : 0;
     const entranceScale = entranceActiveRef.current ? entranceRef.current.scale : 1;
-    const time = state.clock.getElapsedTime();
-
-    const idleStrength = THREE.MathUtils.clamp(
-      ((Date.now() - pointerLastMoved.current) / 1000 - 1.5) / 2.5,
-      0, 1,
-    );
-    const idle = Math.sin(time * 0.55) * 0.038 * idleStrength;
-    const idleRot = Math.sin(time * 0.4) * 0.014 * idleStrength;
 
     const { x, y } = pointerTarget.current;
     const tpx = animationEnabled ? x * 0.16 : 0;
-    const tpy = animationEnabled ? y * 0.08 + entranceY + idle : entranceY + idle;
+    const tpy = animationEnabled ? y * 0.08 + entranceY : entranceY;
     const tpz = animationEnabled ? -Math.abs(x) * 0.05 - Math.abs(y) * 0.03 : 0;
     const trx = animationEnabled ? -y * 0.08 : 0;
-    const tRY = animationEnabled ? x * 0.16 + idleRot : idleRot;
+    const tRY = animationEnabled ? x * 0.16 : 0;
     const trz = animationEnabled ? x * y * -0.035 : 0;
 
     const s = smoothRef.current;

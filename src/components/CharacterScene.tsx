@@ -13,7 +13,7 @@ import {
 } from 'react';
 import * as THREE from 'three';
 
-import charactersBackgroundTextureUrl from '../assets/Textures/characters-background.jpeg';
+import charactersBackgroundTextureUrl from '../assets/Textures/characters-background.webp';
 import {
   backCharacterTransformDefaults,
   backCharacterTransformMobileDefaults,
@@ -128,6 +128,7 @@ interface CharacterSceneGroupProps {
   modelScale: number;
   onPreparedSizeChange: (size: THREE.Vector3) => void;
   pointerTarget: RefObject<THREE.Vector2>;
+  scrollTarget: RefObject<number>;
   viewport: 'mobile' | 'tablet' | 'desktop';
 }
 
@@ -218,6 +219,12 @@ function shapePointerAxis(value: number) {
   const clampedValue = THREE.MathUtils.clamp(value, -1, 1);
 
   return Math.sign(clampedValue) * Math.pow(Math.abs(clampedValue), 1.2);
+}
+
+// Quantize the aspect ratio used as a memo key so continuous resize does not
+// rebuild (deep-clone) the prepared GLTF scenes on every frame of the gesture.
+function quantizeAspectRatio(value: number) {
+  return Math.round(value * 20) / 20;
 }
 
 function getViewportAtDistance(distance: number, fov: number, aspectRatio: number) {
@@ -349,6 +356,7 @@ export function CharacterScene({
   const sectionRef = useRef<HTMLElement>(null);
   const viewportSizeRef = useRef<'mobile' | 'tablet' | 'desktop'>('desktop');
   const pointerTarget = useRef(new THREE.Vector2());
+  const scrollTarget = useRef(0);
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
@@ -384,6 +392,7 @@ export function CharacterScene({
     normalizeCharacterTransform({ ...buildingTransformDefaults }),
   );
   const [bgImageNaturalAspect, setBgImageNaturalAspect] = useState<number>(1475 / 1521);
+  const [frameloop, setFrameloop] = useState<'always' | 'never'>('always');
   const [preparedSceneSize, setPreparedSceneSize] = useState(() => new THREE.Vector3(1, 1, 1));
   const defaultCameraTarget = useMemo<SceneCameraPosition>(
     () => ({
@@ -498,6 +507,50 @@ export function CharacterScene({
       element.removeEventListener('pointerleave', resetPointer);
       window.removeEventListener('blur', resetPointer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const element = sectionRef.current;
+    if (!element) return undefined;
+
+    const updateScroll = () => {
+      const rect = element.getBoundingClientRect();
+      scrollTarget.current = Math.max(0, -rect.top) / Math.max(rect.height, 1);
+    };
+
+    updateScroll();
+    window.addEventListener('scroll', updateScroll, { passive: true });
+    window.addEventListener('resize', updateScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', updateScroll);
+      window.removeEventListener('resize', updateScroll);
+    };
+  }, []);
+
+  useEffect(() => {
+    const element = sectionRef.current;
+
+    if (!element || typeof IntersectionObserver === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[entries.length - 1];
+
+        if (entry) {
+          setFrameloop(entry.isIntersecting ? 'always' : 'never');
+        }
+      },
+      { rootMargin: '200px' },
+    );
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
     };
   }, []);
 
@@ -1148,7 +1201,6 @@ export function CharacterScene({
       data-viewport={viewportSize}
       ref={sectionRef}
       style={{
-        height: '100%',
         overflow: 'hidden',
         position: 'relative',
         width: '100%',
@@ -1179,6 +1231,7 @@ export function CharacterScene({
       )}
       <Canvas
         dpr={[1, 1.25]}
+        frameloop={frameloop}
         gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', stencil: false }}
         onCreated={({ gl }) => {
           gl.setClearColor(0x000000, 0);
@@ -1238,6 +1291,7 @@ export function CharacterScene({
           modelScale={modelScale}
           onPreparedSizeChange={setPreparedSceneSize}
           pointerTarget={pointerTarget}
+          scrollTarget={scrollTarget}
           viewport={viewportSize}
         />
       </Canvas>
@@ -1272,16 +1326,40 @@ function CharacterStage({
   const { camera, size } = useThree();
   const characterGltf = useGLTF(characterModelUrl, dracoDecoderPath);
 
+  const quantizedAspect = quantizeAspectRatio(size.height > 0 ? size.width / size.height : 1);
   const preparedCharacter = useMemo(
     () =>
       buildPreparedCharacterScene(
         characterGltf.scene,
         camera,
-        size.height > 0 ? size.width / size.height : 1,
+        quantizedAspect,
         modelScale,
       ),
-    [camera, characterGltf.scene, modelScale, size.height, size.width],
+    [camera, characterGltf.scene, modelScale, quantizedAspect],
   );
+
+  // prepareSceneObject creates fresh unlit materials for every prepared scene,
+  // so dispose them when the scene is rebuilt or unmounted. Textures are shared
+  // with the cached GLTF and must stay alive, and material.dispose() leaves
+  // them untouched.
+  useEffect(() => {
+    const root = preparedCharacter.root;
+
+    return () => {
+      root.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) {
+          return;
+        }
+
+        if (Array.isArray(child.material)) {
+          child.material.forEach((material) => material.dispose());
+          return;
+        }
+
+        child.material.dispose();
+      });
+    };
+  }, [preparedCharacter.root]);
 
   const aspectScale = useMemo(() => {
     const aspect = size.height > 0 ? size.width / size.height : 16 / 9;
@@ -1360,9 +1438,11 @@ function CharacterSceneGroup({
   modelScale,
   onPreparedSizeChange,
   pointerTarget,
+  scrollTarget,
   viewport,
 }: CharacterSceneGroupProps) {
   const groupRef = useRef<THREE.Group>(null);
+  const scrollSmooth = useRef(0);
 
   useEffect(() => {
     if (!groupRef.current) return;
@@ -1373,28 +1453,31 @@ function CharacterSceneGroup({
   useFrame((_, delta) => {
     if (!groupRef.current) return;
 
+    scrollSmooth.current = THREE.MathUtils.damp(scrollSmooth.current, scrollTarget.current, 0.8, delta);
+    const sp = scrollSmooth.current;
+
     if (!animationEnabled) {
-      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, 0, 3.2, delta);
-      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, 0, 3.2, delta);
+      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, sp * 0.1, 3.2, delta);
+      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, -sp * 0.28, 3.2, delta);
       groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, 0, 3, delta);
-      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, 0, 3.4, delta);
-      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, 0, 3.4, delta);
+      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, sp * 0.012, 3.4, delta);
+      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, sp * 0.045, 3.4, delta);
       groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, 0, 3.2, delta);
       return;
     }
 
     const { x, y } = pointerTarget.current;
 
-    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.16, 3.2, delta);
-    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.08, 3.2, delta);
+    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.16 + sp * 0.1, 3.2, delta);
+    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.08 - sp * 0.28, 3.2, delta);
     groupRef.current.position.z = THREE.MathUtils.damp(
       groupRef.current.position.z,
       -Math.abs(x) * 0.05 - Math.abs(y) * 0.03,
       3,
       delta,
     );
-    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.08, 3.4, delta);
-    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.16, 3.4, delta);
+    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.08 + sp * 0.012, 3.4, delta);
+    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.16 + sp * 0.045, 3.4, delta);
     groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.035, 3.2, delta);
   });
 
