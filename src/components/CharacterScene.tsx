@@ -1201,6 +1201,8 @@ export function CharacterScene({
       data-viewport={viewportSize}
       ref={sectionRef}
       style={{
+        height: '100%',
+        minHeight: '100vh',
         overflow: 'hidden',
         position: 'relative',
         width: '100%',
