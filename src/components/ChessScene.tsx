@@ -18,7 +18,7 @@ import {
 } from 'react';
 import * as THREE from 'three';
 
-import battlefieldTextureUrl from '../assets/Textures/low_angle_battlefield_depth_of_field_pillars_cinema.webp';
+const battlefieldTextureUrl = new URL('../assets/Textures/low_angle_battlefield_depth_of_field_pillars_cinema.webp', import.meta.url).href;
 import {
   chessAmbientIntensityControl,
   chessCameraAxisControls,

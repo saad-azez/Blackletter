@@ -11,8 +11,8 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, 
 import * as THREE from 'three';
 
 
-import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.webp';
-import rocksTextureUrl from '../assets/Textures/rocks.webp';
+const rocksMobileTextureUrl = new URL('../assets/Textures/rocks-mobile.webp', import.meta.url).href;
+const rocksTextureUrl = new URL('../assets/Textures/rocks.webp', import.meta.url).href;
 import {
   castleCameraAxisControls,
   castleFloorTransformDefaults,
