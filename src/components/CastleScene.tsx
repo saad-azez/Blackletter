@@ -140,7 +140,6 @@ interface CastleModelProps {
   modelScale: number;
   modelUrl: string;
   onFloorScreenRectChange: (screenRect: FloorScreenRect | null) => void;
-  pointerLastMoved: MutableRefObject<number>;
   pointerTarget: MutableRefObject<THREE.Vector2>;
   towerModelUrl: string;
   towerTransforms: TowerTransform[];
@@ -546,7 +545,6 @@ export function CastleScene({
   const sectionRef = useRef<HTMLElement>(null);
   const skyImageRef = useRef<HTMLImageElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
-  const pointerLastMoved = useRef(Date.now());
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
@@ -688,7 +686,6 @@ export function CastleScene({
       const normalizedY = 1 - ((event.clientY - top) / height) * 2;
 
       pointerTarget.current.set(shapePointerAxis(normalizedX), shapePointerAxis(normalizedY));
-      pointerLastMoved.current = Date.now();
     };
 
     const handleVisibilityChange = () => {
@@ -702,7 +699,6 @@ export function CastleScene({
       const gx = THREE.MathUtils.clamp(e.gamma / 25, -1, 1);
       const gy = THREE.MathUtils.clamp((e.beta - 25) / 25, -1, 1);
       pointerTarget.current.set(shapePointerAxis(gx), shapePointerAxis(-gy));
-      pointerLastMoved.current = Date.now();
     };
 
     element.addEventListener('pointermove', updatePointer, { passive: true });
@@ -1483,7 +1479,6 @@ export function CastleScene({
             modelScale={modelScale}
             modelUrl={resolvedCastleModelUrl}
             onFloorScreenRectChange={setFloorScreenRect}
-            pointerLastMoved={pointerLastMoved}
             pointerTarget={pointerTarget}
             towerModelUrl={resolvedTowerModelUrl}
             towerTransforms={towerTransforms}
@@ -1550,7 +1545,6 @@ function CastleModel({
   modelScale,
   modelUrl,
   onFloorScreenRectChange,
-  pointerLastMoved,
   pointerTarget,
   towerModelUrl,
   towerTransforms,
