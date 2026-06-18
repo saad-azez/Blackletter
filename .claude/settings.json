@@ -40,7 +40,13 @@
       "Bash(git checkout *)",
       "Read(//c/Users/saada/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/**)",
       "Bash(git check-ignore *)",
-      "Bash(echo \"exit:$?\")"
+      "Bash(echo \"exit:$?\")",
+      "Bash(grep -rEon \"png\\\\|?jpe\\\\?g[^\\\\\"']{0,40}\" node_modules/@webflow/webflow-cli/dist)",
+      "Bash(tar -xzf webflow-webflow-cli-*.tgz)",
+      "Bash(grep -aoE \"\\\\.\\\\\\(\\(png\\\\|svg[^\\)]{0,60}\\)\\\\\\)\\\\\\\\\\\\$/i\" package/dist/index.js)",
+      "Bash(git log *)",
+      "Bash(grep -rao \"new URL\\(.\\\\{0,90\\\\}\" dist/Client)",
+      "Bash(grep -rao \"\\\\.p *= *[^;]\\\\{0,80\\\\}\" dist/Client/remoteEntry.js)"
     ],
     "additionalDirectories": [
       "d:\\blackletter\\src\\components",

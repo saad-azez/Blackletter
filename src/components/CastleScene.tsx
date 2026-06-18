@@ -11,8 +11,8 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, 
 import * as THREE from 'three';
 
 
-const rocksMobileTextureUrl = new URL('../assets/Textures/rocks-mobile.webp', import.meta.url).href;
-const rocksTextureUrl = new URL('../assets/Textures/rocks.webp', import.meta.url).href;
+import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.png';
+import rocksTextureUrl from '../assets/Textures/rocks.png';
 import {
   castleCameraAxisControls,
   castleFloorTransformDefaults,
@@ -46,7 +46,7 @@ const dracoDecoderPath = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7
 const cameraModes = ['Perspective', 'Orthographic'] as const;
 const defaultCastleModelUrl = new URL('../assets/Castle/Castle-Building/castle-building.glb', import.meta.url).href;
 const defaultTowerModelUrl = new URL('../assets/Castle/Tower/Tower.glb', import.meta.url).href;
-const defaultSkyTextureUrl = new URL('../assets/Textures/vortex.webp', import.meta.url).href;
+const defaultSkyTextureUrl = new URL('../assets/Textures/vortex.jpeg', import.meta.url).href;
 const DebugOrbitControls = lazy(() =>
   import('./DebugOrbitControls').then((module) => ({ default: module.DebugOrbitControls })),
 );

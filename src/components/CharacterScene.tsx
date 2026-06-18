@@ -13,7 +13,7 @@ import {
 } from 'react';
 import * as THREE from 'three';
 
-const charactersBackgroundTextureUrl = new URL('../assets/Textures/characters-background.webp', import.meta.url).href;
+import charactersBackgroundTextureUrl from '../assets/Textures/characters-background.jpeg';
 import {
   backCharacterTransformDefaults,
   backCharacterTransformMobileDefaults,
