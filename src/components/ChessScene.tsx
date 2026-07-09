@@ -2277,7 +2277,7 @@ function ChessBoardScene({
   const displayFloorTransform = useMemo(
     () => ({
       ...floorTransform,
-      y: floorTransform.y + compactLayoutAmount * 1.3,
+      y: floorTransform.y + compactLayoutAmount * 1.15,
       z: floorTransform.z + compactLayoutAmount * 1.75,
     }),
     [compactLayoutAmount, floorTransform],
@@ -2338,27 +2338,27 @@ function ChessBoardScene({
         if (index === 1) {
           return {
             ...piece,
-            scale: 1.2,
+            scale: 0.72,
             x: 0,
-            z: 0.25 * preparedFloor.footprintDepth * 0.5,
+            z: 0.11 * preparedFloor.footprintDepth * 0.5,
           };
         }
 
         if (index === 4) {
           return {
             ...piece,
-            scale: 0.6,
-            x: -0.44 * preparedFloor.footprintWidth * 0.5,
-            z: piece.z * preparedFloor.footprintDepth * 0.5,
+            scale: 0.67,
+            x: -0.22 * preparedFloor.footprintWidth * 0.5,
+            z: -0.17 * preparedFloor.footprintDepth * 0.5,
           };
         }
 
         if (index === 5) {
           return {
             ...piece,
-            scale: 0.6,
-            x: 0.44 * preparedFloor.footprintWidth * 0.5,
-            z: piece.z * preparedFloor.footprintDepth * 0.5,
+            scale: 0.67,
+            x: 0.22 * preparedFloor.footprintWidth * 0.5,
+            z: -0.17 * preparedFloor.footprintDepth * 0.5,
           };
         }
 
