@@ -8,6 +8,11 @@ const ChessScene = lazy(() => import('./components/ChessScene'));
 const CurtainDemo = lazy(() =>
   import('./components/CurtainDemo').then((module) => ({ default: module.CurtainDemo })),
 );
+const PaperScrollTransition = lazy(() =>
+  import('./components/PaperScrollTransition').then((module) => ({
+    default: module.PaperScrollTransition,
+  })),
+);
 
 type SceneRoute = 'castle' | 'character' | 'chess';
 
@@ -317,8 +322,53 @@ function SceneCard({
   );
 }
 
+function ScrollTransitionDemo() {
+  const sections = [
+    { background: 'linear-gradient(180deg, #171112 0%, #060607 100%)', direction: 'Bottom to Top', title: 'Section One' },
+    { background: 'radial-gradient(circle at 50% 30%, #1a0f08 0%, #060607 100%)', direction: 'Top to Bottom', title: 'Section Two' },
+    { background: 'linear-gradient(180deg, #0b1210 0%, #060607 100%)', direction: 'Bottom to Top', title: 'Section Three' },
+  ];
+
+  return (
+    <main style={{ color: '#f5efe5', fontFamily: '"Iowan Old Style", "Palatino Linotype", serif' }}>
+      {sections.map((section) => (
+        <section
+          key={section.title}
+          style={{
+            alignItems: 'center',
+            background: section.background,
+            display: 'flex',
+            justifyContent: 'center',
+            minHeight: '100vh',
+          }}
+        >
+          <h1 style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', margin: 0 }}>{section.title}</h1>
+          <Suspense fallback={null}>
+            <PaperScrollTransition direction={section.direction} />
+          </Suspense>
+        </section>
+      ))}
+      <section
+        style={{
+          alignItems: 'center',
+          background: '#060607',
+          display: 'flex',
+          justifyContent: 'center',
+          minHeight: '100vh',
+        }}
+      >
+        <h1 style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', margin: 0 }}>The End</h1>
+      </section>
+    </main>
+  );
+}
+
 function App() {
   const pathname = typeof window === 'undefined' ? '/' : window.location.pathname;
+
+  if (normalizePathname(pathname) === '/scroll') {
+    return <ScrollTransitionDemo />;
+  }
 
   if (normalizePathname(pathname) === '/curtain') {
     return (

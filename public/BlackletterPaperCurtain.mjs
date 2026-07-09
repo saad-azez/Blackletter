@@ -59,9 +59,11 @@ const DEFAULT_OPTIONS = {
   rippedDelta: 1,
   rippedHeight: 0.07,
   horizontal: false,
+  flipAxis: false,
   style: 'theatre',
   exitUsesEnterColors: true,
   manageContainerBackground: true,
+  registerGlobal: true,
   showLoader: true,
   loaderColor: '#f5edcc',
   warmTint: 0.6,
@@ -101,6 +103,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   precision highp float;
 
   uniform float uHorizontal;
+  uniform float uAxisFlip;       // classic only: 1 = anchor the sheet on the opposite edge
   uniform float uStyle;          // 0 = classic wipe, 1 = theatre split
   uniform float uProgress;       // 0..1 over the full animation
   uniform float uMaxAmplitude;
@@ -337,6 +340,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     } else {
       // ── CLASSIC WIPE (Niccolo Miranda's original behaviour) ─────────
       float axis = (uHorizontal == 1.0) ? (1.0 - vUv.x) : vUv.y;
+      if (uAxisFlip > 0.5) axis = 1.0 - axis;
       float amp  = sin(uProgress * PI);
       float curve = amp * uMaxAmplitude * sin(axis * PI);
 
@@ -405,6 +409,7 @@ class PaperCurtain {
       uBackgroundOpacity:    { value: opts.backgroundOpacity },
       uInverted:             { value: false },
       uHorizontal:           { value: opts.horizontal ? 1 : 0 },
+      uAxisFlip:             { value: opts.flipAxis ? 1 : 0 },
       uStyle:                { value: opts.style === 'theatre' || opts.style === 'theater' || opts.style === 'split' ? 1 : 0 },
       uWarmTint:             { value: opts.warmTint },
       uShowLoader:           { value: opts.showLoader ? 1 : 0 },
@@ -442,6 +447,10 @@ class PaperCurtain {
 
   setInverted(value) {
     this.uniforms.uInverted.value = Boolean(value);
+  }
+
+  setAxisFlip(value) {
+    this.uniforms.uAxisFlip.value = value ? 1 : 0;
   }
 
   setStyle(style) {
@@ -512,10 +521,15 @@ export default class PaperCurtainEffect {
     this._tickHandler = this._tick.bind(this);
     this._startTicker();
 
-    if (window.__BLACKLETTER_LAST_PAPER_EFFECT__) {
-      try { window.__BLACKLETTER_LAST_PAPER_EFFECT__.destroy?.(); } catch (e) { /* ignore */ }
+    // The global handle lets a re-run of the page-load embed replace a stale
+    // instance. Scroll transitions run several instances side by side, so they
+    // opt out via registerGlobal: false.
+    if (this.options.registerGlobal !== false) {
+      if (window.__BLACKLETTER_LAST_PAPER_EFFECT__) {
+        try { window.__BLACKLETTER_LAST_PAPER_EFFECT__.destroy?.(); } catch (e) { /* ignore */ }
+      }
+      window.__BLACKLETTER_LAST_PAPER_EFFECT__ = this;
     }
-    window.__BLACKLETTER_LAST_PAPER_EFFECT__ = this;
 
     this._log('created', { options: this.options, gsap: Boolean(window.gsap) });
   }
@@ -615,6 +629,11 @@ export default class PaperCurtainEffect {
 
   setShowLoader(value) {
     this.curtain.setShowLoader(value);
+  }
+
+  setAxisFlip(value) {
+    this.options.flipAxis = Boolean(value);
+    this.curtain.setAxisFlip(value);
   }
 
   setLoadProgress(value) {

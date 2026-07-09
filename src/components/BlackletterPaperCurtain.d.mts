@@ -13,9 +13,11 @@ export interface PaperCurtainOptions {
   rippedDelta?: number;
   rippedHeight?: number;
   horizontal?: boolean;
+  flipAxis?: boolean;
   style?: string;
   exitUsesEnterColors?: boolean;
   manageContainerBackground?: boolean;
+  registerGlobal?: boolean;
   foldCount?: number;
   foldIntensity?: number;
   seamIntensity?: number;
@@ -26,6 +28,7 @@ export interface PaperCurtainOptions {
   edgeHighlightOpacity?: number;
   grainOpacity?: number;
   fiberOpacity?: number;
+  warmTint?: number;
   showLoader?: boolean;
   loaderColor?: string;
   curlIntensity?: number;
@@ -53,6 +56,7 @@ export default class PaperCurtainEffect {
   in(options?: InOptions): unknown;
   out(): unknown;
   setColors(color: string, background: string): void;
+  setAxisFlip(value: boolean): void;
   setLoadProgress(value: number): void;
   draw(): void;
   resize(): void;
