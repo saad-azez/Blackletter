@@ -16,6 +16,10 @@
 //   .curtain.uniforms.uColor.value.set('#hex')
 //   .curtain.uniforms.uBackground.value.set('#hex')
 
+// This standalone copy is loaded directly by the browser (hosted at
+// /BlackletterPaperCurtain.mjs), so it imports ogl from unpkg. The bundled
+// copy at src/components/BlackletterPaperCurtain.mjs imports the same version
+// from npm — keep everything below the imports identical between the two.
 import { Renderer } from 'https://unpkg.com/ogl@0.0.74/src/core/Renderer.js';
 import { Program } from 'https://unpkg.com/ogl@0.0.74/src/core/Program.js';
 import { Texture } from 'https://unpkg.com/ogl@0.0.74/src/core/Texture.js';

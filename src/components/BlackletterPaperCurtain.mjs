@@ -16,13 +16,11 @@
 //   .curtain.uniforms.uColor.value.set('#hex')
 //   .curtain.uniforms.uBackground.value.set('#hex')
 
-import { Renderer } from 'https://unpkg.com/ogl@0.0.74/src/core/Renderer.js';
-import { Program } from 'https://unpkg.com/ogl@0.0.74/src/core/Program.js';
-import { Texture } from 'https://unpkg.com/ogl@0.0.74/src/core/Texture.js';
-import { Triangle } from 'https://unpkg.com/ogl@0.0.74/src/extras/Triangle.js';
-import { Mesh } from 'https://unpkg.com/ogl@0.0.74/src/core/Mesh.js';
-import { Color } from 'https://unpkg.com/ogl@0.0.74/src/math/Color.js';
-import { Vec2 } from 'https://unpkg.com/ogl@0.0.74/src/math/Vec2.js';
+// This bundled copy imports ogl from npm so Vite and the Webflow CLI can
+// package it. The standalone copy at public/BlackletterPaperCurtain.mjs is
+// loaded directly by the browser and imports the same version from unpkg —
+// keep everything below these imports identical between the two files.
+import { Color, Mesh, Program, Renderer, Texture, Triangle, Vec2 } from 'ogl';
 
 // Converts any valid CSS color string (named, rgb(), rgba(), hex) to a
 // #rrggbb hex string that OGL's Color class can parse. Falls back to
