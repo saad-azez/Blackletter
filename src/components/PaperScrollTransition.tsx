@@ -6,8 +6,6 @@ export type PaperScrollDirection = 'Bottom to Top' | 'Top to Bottom';
 export interface PaperScrollTransitionProps {
   /** Paper colour for the sheet and torn band. */
   color?: string;
-  /** Emit detailed console logs describing what this boundary sees and does. */
-  debug?: boolean;
   /** Sweep direction of the wipe when moving to the next section. */
   direction?: string;
   /** Total transition time in seconds (cover + reveal). */
@@ -47,16 +45,6 @@ const WAKE_DISTANCE_PX_FACTOR = 1.75;
  */
 const transitionBus = { active: false, cooldownUntil: 0 };
 
-/**
- * Which host sections already have an instance bound — two instances on one
- * section is almost always a markup problem (inner wrappers that aren't
- * <section> elements), so it gets a loud warning in debug mode.
- */
-const hostRegistry = new Map<Element, number>();
-
-/** One breadcrumb per page load so it's obvious the component is running. */
-let announcedActive = false;
-
 function getComposedParent(element: Element | null): Element | null {
   if (!element) {
     return null;
@@ -76,20 +64,13 @@ function getComposedParent(element: Element | null): Element | null {
  * ancestor that is a <section> (Webflow's Section element) or opts in via
  * data-curtain-section; otherwise the first ancestor with real height.
  */
-function findHostSection(element: Element | null): {
-  element: Element | null;
-  matchedBy: 'data-curtain-section' | 'section tag' | 'sized ancestor fallback' | 'none';
-} {
+function findHostSection(element: Element | null): Element | null {
   let firstSized: Element | null = null;
   let current = getComposedParent(element);
 
   while (current && current !== document.documentElement) {
-    if (current.matches('[data-curtain-section]')) {
-      return { element: current, matchedBy: 'data-curtain-section' };
-    }
-
-    if (current.matches('section')) {
-      return { element: current, matchedBy: 'section tag' };
+    if (current.matches('[data-curtain-section]') || current.matches('section')) {
+      return current;
     }
 
     // Never fall back to the page itself — an instance bound to <body> would
@@ -105,28 +86,7 @@ function findHostSection(element: Element | null): {
     current = getComposedParent(current);
   }
 
-  return firstSized
-    ? { element: firstSized, matchedBy: 'sized ancestor fallback' }
-    : { element: null, matchedBy: 'none' };
-}
-
-function describeElement(element: Element) {
-  const id = element.id ? `#${element.id}` : '';
-  const classes = element.classList.length
-    ? `.${[...element.classList].slice(0, 3).join('.')}`
-    : '';
-
-  if (id || classes) {
-    return `${element.tagName.toLowerCase()}${id}${classes}`;
-  }
-
-  // No id/classes to tell sections apart — fall back to document order.
-  const peers = [...document.querySelectorAll('section, [data-curtain-section]')];
-  const index = peers.indexOf(element);
-
-  return index >= 0
-    ? `${element.tagName.toLowerCase()}[${index + 1}]`
-    : element.tagName.toLowerCase();
+  return firstSized;
 }
 
 function normalizeDirection(direction: unknown): PaperScrollDirection {
@@ -163,7 +123,6 @@ function easeInOutCubic(t: number) {
 
 export function PaperScrollTransition({
   color = '#1d1d1b',
-  debug = false,
   direction = 'Bottom to Top',
   duration = 2.2,
   zIndex = 200,
@@ -171,7 +130,6 @@ export function PaperScrollTransition({
   const anchorRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const resolvedColor = toText(color, '#1d1d1b');
-  const resolvedDebug = debug === true || String(debug).toLowerCase() === 'true';
   const resolvedDirection = normalizeDirection(direction);
   const resolvedDuration = Math.min(Math.max(toNumber(duration, 2.2), 0.6), 6);
   const resolvedZIndex = toNumber(zIndex, 200);
@@ -192,15 +150,7 @@ export function PaperScrollTransition({
 
     let effect: InstanceType<typeof PaperCurtainEffect> | null = null;
     let section: Element | null = null;
-    let sectionLabel = 'unbound';
-    let bindMatchedBy = 'none';
-    let bindLiftedFrom: number | null = null;
-    let bindInstanceCount = 0;
-    let bindLogged = false;
-    let noSectionWarned = false;
     let liftChecked = false;
-    let lastLoggedState = '';
-    let transitionStartedAt = 0;
     let scrollRaf: number | null = null;
     let tweenRaf: number | null = null;
     let holdTimer: number | null = null;
@@ -209,21 +159,6 @@ export function PaperScrollTransition({
     let lastScrollY = window.scrollY;
     let lastTouchY: number | null = null;
     let previousOverflow = '';
-
-    const debugEnabled = () =>
-      resolvedDebug ||
-      Boolean(
-        (window as unknown as { __BLACKLETTER_PAPER_DEBUG__?: unknown })
-          .__BLACKLETTER_PAPER_DEBUG__,
-      );
-
-    const log = (message: string, data?: Record<string, unknown>, level: 'log' | 'warn' = 'log') => {
-      if (!debugEnabled()) {
-        return;
-      }
-
-      console[level](`[PaperScroll · ${sectionLabel}] ${message}`, data ?? '');
-    };
 
     const ensureEffect = () => {
       if (effect || destroyed) {
@@ -249,87 +184,23 @@ export function PaperScrollTransition({
         manageContainerBackground: false,
         registerGlobal: false,
       });
-
-      log('WebGL curtain created — boundary is nearby');
     };
 
     const releaseEffect = () => {
       if (!running && effect) {
         effect.destroy();
         effect = null;
-        log('WebGL curtain released — boundary is far away');
       }
-    };
-
-    // The bind summary is the most useful log, but debug may be switched on
-    // (via the global flag) long after mount — so it logs lazily, on the
-    // first measurement where logging is actually enabled.
-    const maybeLogBindSummary = () => {
-      if (bindLogged || !section || !debugEnabled()) {
-        return;
-      }
-
-      bindLogged = true;
-
-      const rect = section.getBoundingClientRect();
-
-      log('bound to host section', {
-        matchedBy: bindMatchedBy,
-        heightPx: Math.round(rect.height),
-        topPx: Math.round(rect.top),
-        bottomPx: Math.round(rect.bottom),
-        viewportPx: window.innerHeight,
-        scrollY: Math.round(window.scrollY),
-        direction: resolvedDirection,
-        durationS: resolvedDuration,
-        instancesOnThisSection: bindInstanceCount,
-        liftedFromPx: bindLiftedFrom,
-      });
-
-      if (bindInstanceCount > 1) {
-        log(
-          `${bindInstanceCount} transition instances are bound to this SAME section — each instance needs its own section. If your inner sections are divs inside a wrapper (e.g. experience-started), add a data-curtain-section attribute to each inner wrapper.`,
-          undefined,
-          'warn',
-        );
-      }
-
     };
 
     const measure = () => {
       if (!section) {
-        const found = findHostSection(anchorRef.current);
-
-        section = found.element;
+        section = findHostSection(anchorRef.current);
 
         if (!section) {
-          if (!noSectionWarned) {
-            noSectionWarned = true;
-            log(
-              'no host section found — this instance is INACTIVE. Place the component inside a Section element, or add a data-curtain-section attribute to the wrapper that spans the section.',
-              undefined,
-              'warn',
-            );
-          }
-
           return null;
         }
-
-        sectionLabel = describeElement(section);
-        bindMatchedBy = found.matchedBy;
-        bindInstanceCount = (hostRegistry.get(section) ?? 0) + 1;
-        hostRegistry.set(section, bindInstanceCount);
-
-        if (section.getBoundingClientRect().height < 2) {
-          log(
-            'host section currently measures 0px tall — the boundary stays INERT until it has height. Fine if the section is hidden until the experience starts; if it never gains height, move data-curtain-section to the element that actually spans the section.',
-            undefined,
-            'warn',
-          );
-        }
       }
-
-      maybeLogBindSummary();
 
       const rect = section.getBoundingClientRect();
 
@@ -342,55 +213,14 @@ export function PaperScrollTransition({
         liftChecked = true;
 
         if (rect.height < window.innerHeight - 1) {
-          bindLiftedFrom = rect.height;
           section.style.minHeight = '100vh';
           section.style.minHeight = '100svh';
-          log('section is shorter than the viewport — lifted min-height to 100svh', {
-            originalHeightPx: Math.round(rect.height),
-            viewportPx: window.innerHeight,
-          });
 
           return section.getBoundingClientRect();
         }
       }
 
       return rect;
-    };
-
-    const describeState = (rect: DOMRect, viewportHeight: number) => {
-      if (rect.height < 2) {
-        return 'INERT — section has no height (hidden, or the attribute is on a collapsed wrapper)';
-      }
-
-      if (rect.bottom < -2) {
-        return 'passed — section is fully above the viewport';
-      }
-
-      if (rect.bottom <= CAPTURE_WINDOW_PX) {
-        return 'resting at the FOLLOWING section top — armed for an upward transition';
-      }
-
-      if (rect.top > viewportHeight - 2) {
-        return 'not reached — section is fully below the viewport';
-      }
-
-      if (
-        rect.top <= 2 &&
-        rect.bottom >= viewportHeight - 2 &&
-        rect.bottom <= viewportHeight + CAPTURE_WINDOW_PX
-      ) {
-        return 'at END boundary — armed, next scroll-down input starts the transition';
-      }
-
-      if (rect.top <= 2 && rect.bottom > viewportHeight) {
-        return 'viewport inside section — free scroll (end not reached yet)';
-      }
-
-      if (rect.top > 2) {
-        return 'entering — section top is visible, previous section still on screen above';
-      }
-
-      return 'boundary bleed inside viewport — clamp should fire';
     };
 
     const preventTouchScroll = (event: TouchEvent) => {
@@ -439,14 +269,9 @@ export function PaperScrollTransition({
       transitionBus.active = false;
       transitionBus.cooldownUntil = performance.now() + RETRIGGER_COOLDOWN_MS;
       lastScrollY = window.scrollY;
-      log('transition finished — resting on target section, scroll unlocked', {
-        scrollY: Math.round(window.scrollY),
-        elapsedMs: Math.round(performance.now() - transitionStartedAt),
-        cooldownMs: RETRIGGER_COOLDOWN_MS,
-      });
     };
 
-    const runTransition = (towards: 'next' | 'previous', source: string) => {
+    const runTransition = (towards: 'next' | 'previous') => {
       ensureEffect();
 
       if (!effect || !section || running || transitionBus.active) {
@@ -457,20 +282,10 @@ export function PaperScrollTransition({
 
       running = true;
       transitionBus.active = true;
-      transitionStartedAt = performance.now();
       lockScroll();
       effect.setAxisFlip(coverFlip);
       effect.state.progress = 0;
       canvas.style.opacity = '1';
-
-      log(`transition started → ${towards.toUpperCase()} section (scroll locked)`, {
-        triggeredBy: source,
-        paperEntersFrom: coverFlip ? 'bottom' : 'top',
-        coverMs: Math.round(phaseMs),
-        holdMs: COVER_HOLD_MS,
-        revealMs: Math.round(phaseMs),
-        scrollY: Math.round(window.scrollY),
-      });
 
       tweenProgress(0, 1, () => {
         if (destroyed || !effect || !section) {
@@ -487,14 +302,8 @@ export function PaperScrollTransition({
           towards === 'next'
             ? window.scrollY + bottom
             : window.scrollY + bottom - window.innerHeight;
-        const clampedTarget = Math.max(0, target);
 
-        log('cover complete — screen fully hidden, snapping page underneath', {
-          fromScrollY: Math.round(window.scrollY),
-          toScrollY: Math.round(clampedTarget),
-        });
-
-        window.scrollTo(0, clampedTarget);
+        window.scrollTo(0, Math.max(0, target));
 
         holdTimer = window.setTimeout(() => {
           holdTimer = null;
@@ -505,7 +314,6 @@ export function PaperScrollTransition({
           }
 
           effect.setAxisFlip(!coverFlip);
-          log(`reveal started — sheet exiting through the ${coverFlip ? 'top' : 'bottom'}`);
           tweenProgress(1, 0, finishTransition);
         }, COVER_HOLD_MS);
       });
@@ -516,7 +324,7 @@ export function PaperScrollTransition({
      * when the event was consumed. The transition starts with the viewport
      * pixel-aligned inside this section, so the neighbour is never shown.
      */
-    const captureIntent = (towardsNext: boolean, source: string) => {
+    const captureIntent = (towardsNext: boolean) => {
       if (destroyed || running || transitionBus.active) {
         return running || transitionBus.active;
       }
@@ -542,24 +350,14 @@ export function PaperScrollTransition({
         }
 
         if (performance.now() < transitionBus.cooldownUntil) {
-          log(`${source} at end boundary ignored — cooldown after previous transition`, {
-            remainingMs: Math.round(transitionBus.cooldownUntil - performance.now()),
-          });
           return true;
         }
 
         if (rect.bottom > viewportHeight + 2) {
-          log('aligning section end to the viewport bottom before cover', {
-            byPx: Math.round(rect.bottom - viewportHeight),
-          });
           window.scrollTo(0, window.scrollY + (rect.bottom - viewportHeight));
         }
 
-        log(`${source} captured at END boundary — page did not move, starting transition`, {
-          sectionBottomPx: Math.round(rect.bottom),
-          viewportPx: viewportHeight,
-        });
-        runTransition('next', source);
+        runTransition('next');
 
         return true;
       }
@@ -573,23 +371,14 @@ export function PaperScrollTransition({
       }
 
       if (performance.now() < transitionBus.cooldownUntil) {
-        log(`${source} at upward boundary ignored — cooldown after previous transition`, {
-          remainingMs: Math.round(transitionBus.cooldownUntil - performance.now()),
-        });
         return true;
       }
 
       if (rect.bottom > 2) {
-        log('aligning following section top to the viewport top before cover', {
-          byPx: Math.round(rect.bottom),
-        });
         window.scrollTo(0, window.scrollY + rect.bottom);
       }
 
-      log(`${source} captured at UPWARD boundary — page did not move, starting transition`, {
-        sectionBottomPx: Math.round(rect.bottom),
-      });
-      runTransition('previous', source);
+      runTransition('previous');
 
       return true;
     };
@@ -599,7 +388,7 @@ export function PaperScrollTransition({
         return;
       }
 
-      if (captureIntent(event.deltaY > 0, 'wheel')) {
+      if (captureIntent(event.deltaY > 0)) {
         event.preventDefault();
       }
     };
@@ -619,7 +408,7 @@ export function PaperScrollTransition({
 
       lastTouchY = currentY;
 
-      if (delta !== 0 && captureIntent(delta > 0, 'touch')) {
+      if (delta !== 0 && captureIntent(delta > 0)) {
         event.preventDefault();
       }
     };
@@ -634,7 +423,7 @@ export function PaperScrollTransition({
       const isDown = downKeys.includes(event.key) || (event.key === ' ' && !event.shiftKey);
       const isUp = upKeys.includes(event.key) || (event.key === ' ' && event.shiftKey);
 
-      if ((isDown || isUp) && captureIntent(isDown, 'keyboard')) {
+      if ((isDown || isUp) && captureIntent(isDown)) {
         event.preventDefault();
       }
     };
@@ -662,17 +451,6 @@ export function PaperScrollTransition({
 
       const viewportHeight = window.innerHeight;
       const clampWindow = viewportHeight * CLAMP_WINDOW_FRACTION;
-      const state = describeState(rect, viewportHeight);
-
-      if (debugEnabled() && state !== lastLoggedState) {
-        lastLoggedState = state;
-        log(`state → ${state}`, {
-          topPx: Math.round(rect.top),
-          bottomPx: Math.round(rect.bottom),
-          viewportPx: viewportHeight,
-          scrollY: Math.round(scrollY),
-        });
-      }
 
       // A section without layout (hidden until the experience starts, or a
       // collapsed wrapper) has no meaningful boundary — stay fully inert.
@@ -693,26 +471,20 @@ export function PaperScrollTransition({
         rect.bottom < viewportHeight - 2 &&
         rect.bottom > viewportHeight - clampWindow
       ) {
-        log('scroll bled past the end boundary (momentum/scrollbar) — clamping back', {
-          bleedPx: Math.round(viewportHeight - rect.bottom),
-        });
         window.scrollTo(0, scrollY - (viewportHeight - rect.bottom));
 
         if (performance.now() >= transitionBus.cooldownUntil) {
-          runTransition('next', 'scroll clamp');
+          runTransition('next');
         }
 
         return;
       }
 
       if (goingUp && rect.bottom > 2 && rect.bottom < clampWindow) {
-        log('scroll bled above the boundary (momentum/scrollbar) — clamping back', {
-          bleedPx: Math.round(rect.bottom),
-        });
         window.scrollTo(0, scrollY + rect.bottom);
 
         if (performance.now() >= transitionBus.cooldownUntil) {
-          runTransition('previous', 'scroll clamp');
+          runTransition('previous');
         }
       }
     };
@@ -725,13 +497,6 @@ export function PaperScrollTransition({
 
     // Give Webflow's slot/host layout a beat to settle before measuring.
     const timer = setTimeout(() => {
-      if (!announcedActive) {
-        announcedActive = true;
-        console.info(
-          '[PaperScroll] paper scroll transitions are active on this page. For detailed per-section logs, set __BLACKLETTER_PAPER_DEBUG__ = true in this console and scroll (or turn on the Debug Logs prop).',
-        );
-      }
-
       measure();
       update();
       window.addEventListener('scroll', schedule, { passive: true });
@@ -770,19 +535,9 @@ export function PaperScrollTransition({
         transitionBus.active = false;
       }
 
-      if (section) {
-        const count = (hostRegistry.get(section) ?? 1) - 1;
-
-        if (count <= 0) {
-          hostRegistry.delete(section);
-        } else {
-          hostRegistry.set(section, count);
-        }
-      }
-
       releaseEffect();
     };
-  }, [resolvedColor, resolvedDebug, resolvedDirection, resolvedDuration]);
+  }, [resolvedColor, resolvedDirection, resolvedDuration]);
 
   return (
     <div ref={anchorRef} style={{ height: 0, width: 0 }}>
