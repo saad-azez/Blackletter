@@ -36,6 +36,13 @@ const paperScrollTransitionWebflow = declareComponent(PaperScrollTransition, {
       defaultValue: 200,
       tooltip: 'Stacking order of the full-screen overlay. Keep it above section content but below fixed navigation you want visible.',
     }),
+    debug: props.Boolean({
+      name: 'Debug Logs',
+      defaultValue: false,
+      trueLabel: 'On',
+      falseLabel: 'Off',
+      tooltip: 'Logs to the browser console which section this instance is bound to, its boundary state on scroll, and every transition step. You can also set __BLACKLETTER_PAPER_DEBUG__ = true in the console to enable logs on all instances at once.',
+    }),
   },
 });
 
