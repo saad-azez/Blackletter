@@ -15,8 +15,12 @@ export interface PaperScrollTransitionProps {
   zIndex?: number;
 }
 
-/** Pause at full cover before the reveal, like a page changing underneath. */
-const COVER_HOLD_MS = 180;
+/**
+ * While the screen is fully covered, the page glides to its target over this
+ * window instead of teleporting — the scrollbar thumb moves smoothly and the
+ * pause doubles as the "page changing underneath" beat.
+ */
+const SNAP_GLIDE_MS = 320;
 
 /**
  * Wheel/key input within this many px of the boundary is captured and snapped
@@ -152,14 +156,13 @@ export function PaperScrollTransition({
     // the same way and exits through the opposite edge — one continuous pass.
     // Crossing the boundary upward plays the mirrored pass.
     const downCoverFlip = resolvedDirection === 'Bottom to Top';
-    const phaseMs = (resolvedDuration * 1000 - COVER_HOLD_MS) / 2;
+    const phaseMs = (resolvedDuration * 1000 - SNAP_GLIDE_MS) / 2;
 
     let effect: InstanceType<typeof PaperCurtainEffect> | null = null;
     let section: Element | null = null;
     let liftChecked = false;
     let scrollRaf: number | null = null;
     let tweenRaf: number | null = null;
-    let holdTimer: number | null = null;
     let destroyed = false;
     let running = false;
     let lastScrollY = window.scrollY;
@@ -309,30 +312,42 @@ export function PaperScrollTransition({
           return;
         }
 
-        // Screen is fully covered: move the page underneath, then let the
-        // sheet continue out through the far edge to reveal it. `next` lands
-        // with the following section's top at the viewport top; `previous`
-        // lands with this section's end at the viewport bottom.
+        // Screen is fully covered: glide the page (and the scrollbar thumb)
+        // to its target instead of teleporting, then let the sheet continue
+        // out through the far edge to reveal it. `next` lands with the
+        // following section's top at the viewport top; `previous` lands with
+        // this section's end at the viewport bottom.
         const bottom = section.getBoundingClientRect().bottom;
-        const target =
-          towards === 'next'
-            ? window.scrollY + bottom
-            : window.scrollY + bottom - window.innerHeight;
+        const fromY = window.scrollY;
+        const targetY = Math.max(
+          0,
+          towards === 'next' ? fromY + bottom : fromY + bottom - window.innerHeight,
+        );
+        const glideStart = performance.now();
 
-        pinnedScrollY = Math.max(0, target);
-        window.scrollTo(0, pinnedScrollY);
-
-        holdTimer = window.setTimeout(() => {
-          holdTimer = null;
+        const glide = (now: number) => {
+          tweenRaf = null;
 
           if (destroyed || !effect) {
             finishTransition();
             return;
           }
 
+          const t = Math.min((now - glideStart) / SNAP_GLIDE_MS, 1);
+
+          pinnedScrollY = Math.round(fromY + (targetY - fromY) * easeInOutCubic(t));
+          window.scrollTo(0, pinnedScrollY);
+
+          if (t < 1) {
+            tweenRaf = requestAnimationFrame(glide);
+            return;
+          }
+
           effect.setAxisFlip(!coverFlip);
           tweenProgress(1, 0, finishTransition);
-        }, COVER_HOLD_MS);
+        };
+
+        tweenRaf = requestAnimationFrame(glide);
       });
     };
 
@@ -540,10 +555,6 @@ export function PaperScrollTransition({
 
       if (tweenRaf !== null) {
         cancelAnimationFrame(tweenRaf);
-      }
-
-      if (holdTimer !== null) {
-        clearTimeout(holdTimer);
       }
 
       if (running) {
