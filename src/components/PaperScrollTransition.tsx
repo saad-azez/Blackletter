@@ -6,7 +6,7 @@ export type PaperScrollDirection = 'Bottom to Top' | 'Top to Bottom';
 export interface PaperScrollTransitionProps {
   /** Paper colour for the sheet and torn band. */
   color?: string;
-  /** Sweep direction of the wipe. Defaults to bottom-to-top. */
+  /** Sweep direction of the wipe when moving to the next section. */
   direction?: string;
   /** Total transition time in seconds (cover + reveal). */
   duration?: number;
@@ -14,21 +14,36 @@ export interface PaperScrollTransitionProps {
   zIndex?: number;
 }
 
-/**
- * How far (px) the section end must scroll past the viewport bottom before the
- * transition fires — a little intent, so resting exactly at a 100vh section's
- * end doesn't trigger it.
- */
-const TRIGGER_OFFSET_PX = 60;
-
 /** Pause at full cover before the reveal, like a page changing underneath. */
 const COVER_HOLD_MS = 180;
+
+/**
+ * Wheel/key input within this many px of the boundary is captured and snapped
+ * to it, so the transition always starts pixel-aligned with the section end.
+ */
+const CAPTURE_WINDOW_PX = 48;
+
+/**
+ * Scroll that slips past a boundary between events (momentum, scrollbar drag)
+ * is clamped back if it's within this fraction of the viewport; beyond that we
+ * assume a deliberate jump (anchor link) and leave it alone.
+ */
+const CLAMP_WINDOW_FRACTION = 0.5;
+
+/** Ignore new triggers briefly after a transition so momentum can't chain. */
+const RETRIGGER_COOLDOWN_MS = 400;
 
 /**
  * Create/destroy the WebGL effect based on distance to the section end so a
  * page full of sections never holds more than a couple of live contexts.
  */
 const WAKE_DISTANCE_PX_FACTOR = 1.75;
+
+/**
+ * All instances share this so only one boundary can transition at a time and
+ * a finished transition briefly suppresses every other boundary on the page.
+ */
+const transitionBus = { active: false, cooldownUntil: 0 };
 
 function getComposedParent(element: Element | null): Element | null {
   if (!element) {
@@ -45,9 +60,9 @@ function getComposedParent(element: Element | null): Element | null {
 }
 
 /**
- * The section whose end triggers the wipe: nearest composed ancestor that is a
- * <section> (Webflow's Section element) or opts in via data-curtain-section;
- * otherwise the first ancestor with real height, as a fallback for wrappers.
+ * The section whose end is this component's boundary: nearest composed
+ * ancestor that is a <section> (Webflow's Section element) or opts in via
+ * data-curtain-section; otherwise the first ancestor with real height.
  */
 function findHostSection(element: Element | null): Element | null {
   let firstSized: Element | null = null;
@@ -88,6 +103,13 @@ function toNumber(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function isEditableTarget(target: EventTarget | null) {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || target.matches('input, textarea, select'))
+  );
+}
+
 // Matches the button curtain's power2.inOut feel.
 function easeInOutCubic(t: number) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -116,7 +138,8 @@ export function PaperScrollTransition({
     // Cover anchors the sheet on the edge it sweeps in from; the reveal swaps
     // the anchor while the screen is fully covered so the sheet keeps moving
     // the same way and exits through the opposite edge — one continuous pass.
-    const coverFlip = resolvedDirection === 'Bottom to Top';
+    // Crossing the boundary upward plays the mirrored pass.
+    const downCoverFlip = resolvedDirection === 'Bottom to Top';
     const phaseMs = (resolvedDuration * 1000 - COVER_HOLD_MS) / 2;
 
     let effect: InstanceType<typeof PaperCurtainEffect> | null = null;
@@ -126,8 +149,8 @@ export function PaperScrollTransition({
     let holdTimer: number | null = null;
     let destroyed = false;
     let running = false;
-    let armed = true;
     let lastScrollY = window.scrollY;
+    let lastTouchY: number | null = null;
     let previousOverflow = '';
 
     const ensureEffect = () => {
@@ -141,7 +164,7 @@ export function PaperScrollTransition({
         style: 'classic',
         showLoader: false,
         horizontal: false,
-        flipAxis: coverFlip,
+        flipAxis: downCoverFlip,
         amplitude: 0.25,
         rippedFrequency: 3.5,
         rippedAmplitude: 0.05,
@@ -161,6 +184,26 @@ export function PaperScrollTransition({
         effect?.destroy();
         effect = null;
       }
+    };
+
+    const measure = () => {
+      if (!section) {
+        section = findHostSection(anchorRef.current);
+
+        // A boundary section must be able to fill the viewport on its own —
+        // otherwise its neighbours are visible beside it and no curtain can
+        // hide them. Lift short sections to viewport height.
+        if (section instanceof HTMLElement) {
+          const height = section.getBoundingClientRect().height;
+
+          if (height > 0 && height < window.innerHeight - 1) {
+            section.style.minHeight = '100vh';
+            section.style.minHeight = '100svh';
+          }
+        }
+      }
+
+      return section ? section.getBoundingClientRect() : null;
     };
 
     const preventTouchScroll = (event: TouchEvent) => {
@@ -206,18 +249,22 @@ export function PaperScrollTransition({
       canvas.style.opacity = '0';
       unlockScroll();
       running = false;
+      transitionBus.active = false;
+      transitionBus.cooldownUntil = performance.now() + RETRIGGER_COOLDOWN_MS;
       lastScrollY = window.scrollY;
     };
 
-    const runTransition = () => {
+    const runTransition = (towards: 'next' | 'previous') => {
       ensureEffect();
 
-      if (!effect || !section) {
+      if (!effect || !section || running || transitionBus.active) {
         return;
       }
 
+      const coverFlip = towards === 'next' ? downCoverFlip : !downCoverFlip;
+
       running = true;
-      armed = false;
+      transitionBus.active = true;
       lockScroll();
       effect.setAxisFlip(coverFlip);
       effect.state.progress = 0;
@@ -229,11 +276,17 @@ export function PaperScrollTransition({
           return;
         }
 
-        // Screen is fully covered: move to the next section underneath, then
-        // let the sheet continue out through the far edge to reveal it.
+        // Screen is fully covered: move the page underneath, then let the
+        // sheet continue out through the far edge to reveal it. `next` lands
+        // with the following section's top at the viewport top; `previous`
+        // lands with this section's end at the viewport bottom.
         const bottom = section.getBoundingClientRect().bottom;
+        const target =
+          towards === 'next'
+            ? window.scrollY + bottom
+            : window.scrollY + bottom - window.innerHeight;
 
-        window.scrollTo(0, window.scrollY + bottom);
+        window.scrollTo(0, Math.max(0, target));
 
         holdTimer = window.setTimeout(() => {
           holdTimer = null;
@@ -249,43 +302,165 @@ export function PaperScrollTransition({
       });
     };
 
+    /**
+     * Capture a scroll intent (wheel/touch/key) at the boundary. Returns true
+     * when the event was consumed. The transition starts with the viewport
+     * pixel-aligned inside this section, so the neighbour is never shown.
+     */
+    const captureIntent = (towardsNext: boolean) => {
+      if (destroyed || running || transitionBus.active) {
+        return running || transitionBus.active;
+      }
+
+      const rect = measure();
+
+      if (!rect) {
+        return false;
+      }
+
+      const viewportHeight = window.innerHeight;
+
+      if (towardsNext) {
+        // At (or approaching) this section's end while fully inside it.
+        const atEnd =
+          rect.top <= 2 &&
+          rect.bottom >= viewportHeight - 2 &&
+          rect.bottom <= viewportHeight + CAPTURE_WINDOW_PX;
+
+        if (!atEnd) {
+          return false;
+        }
+
+        if (performance.now() < transitionBus.cooldownUntil) {
+          return true;
+        }
+
+        if (rect.bottom > viewportHeight + 2) {
+          window.scrollTo(0, window.scrollY + (rect.bottom - viewportHeight));
+        }
+
+        runTransition('next');
+
+        return true;
+      }
+
+      // Heading back up: the viewport sits at the top of the following
+      // section, i.e. this section's end is at (or just above) the viewport top.
+      const atFollowingTop = rect.bottom >= -2 && rect.bottom <= CAPTURE_WINDOW_PX;
+
+      if (!atFollowingTop) {
+        return false;
+      }
+
+      if (performance.now() < transitionBus.cooldownUntil) {
+        return true;
+      }
+
+      if (rect.bottom > 2) {
+        window.scrollTo(0, window.scrollY + rect.bottom);
+      }
+
+      runTransition('previous');
+
+      return true;
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY === 0) {
+        return;
+      }
+
+      if (captureIntent(event.deltaY > 0)) {
+        event.preventDefault();
+      }
+    };
+
+    const onTouchStart = (event: TouchEvent) => {
+      lastTouchY = event.touches[0]?.clientY ?? null;
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      const currentY = event.touches[0]?.clientY;
+
+      if (currentY == null || lastTouchY == null) {
+        return;
+      }
+
+      const delta = lastTouchY - currentY; // finger up = scroll down
+
+      lastTouchY = currentY;
+
+      if (delta !== 0 && captureIntent(delta > 0)) {
+        event.preventDefault();
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      const downKeys = ['ArrowDown', 'PageDown', 'End'];
+      const upKeys = ['ArrowUp', 'PageUp', 'Home'];
+      const isDown = downKeys.includes(event.key) || (event.key === ' ' && !event.shiftKey);
+      const isUp = upKeys.includes(event.key) || (event.key === ' ' && event.shiftKey);
+
+      if ((isDown || isUp) && captureIntent(isDown)) {
+        event.preventDefault();
+      }
+    };
+
+    // Momentum and scrollbar drags produce no capturable events; if they bleed
+    // across the boundary between frames, clamp straight back and transition.
     const update = () => {
       scrollRaf = null;
 
-      if (destroyed || running) {
+      if (destroyed || running || transitionBus.active) {
         return;
       }
 
       const scrollY = window.scrollY;
       const goingDown = scrollY > lastScrollY;
+      const goingUp = scrollY < lastScrollY;
 
       lastScrollY = scrollY;
 
-      if (!section) {
-        section = findHostSection(anchorRef.current);
+      const rect = measure();
 
-        if (!section) {
-          return;
-        }
+      if (!rect) {
+        return;
       }
 
       const viewportHeight = window.innerHeight;
-      const bottom = section.getBoundingClientRect().bottom;
+      const clampWindow = viewportHeight * CLAMP_WINDOW_FRACTION;
 
-      // Sleep the WebGL context when the section end is far away.
-      if (Math.abs(bottom - viewportHeight) > viewportHeight * WAKE_DISTANCE_PX_FACTOR) {
+      // Sleep the WebGL context when the boundary is far away.
+      if (Math.abs(rect.bottom - viewportHeight) > viewportHeight * WAKE_DISTANCE_PX_FACTOR) {
         releaseEffect();
       } else {
         ensureEffect();
       }
 
-      // Re-arm once the user has scrolled back up so the end is out of view.
-      if (!armed && bottom >= viewportHeight - 4) {
-        armed = true;
+      if (
+        goingDown &&
+        rect.bottom < viewportHeight - 2 &&
+        rect.bottom > viewportHeight - clampWindow
+      ) {
+        window.scrollTo(0, scrollY - (viewportHeight - rect.bottom));
+
+        if (performance.now() >= transitionBus.cooldownUntil) {
+          runTransition('next');
+        }
+
+        return;
       }
 
-      if (armed && goingDown && bottom > 0 && bottom < viewportHeight - TRIGGER_OFFSET_PX) {
-        runTransition();
+      if (goingUp && rect.bottom > 2 && rect.bottom < clampWindow) {
+        window.scrollTo(0, scrollY + rect.bottom);
+
+        if (performance.now() >= transitionBus.cooldownUntil) {
+          runTransition('previous');
+        }
       }
     };
 
@@ -297,9 +472,14 @@ export function PaperScrollTransition({
 
     // Give Webflow's slot/host layout a beat to settle before measuring.
     const timer = setTimeout(() => {
+      measure();
       update();
       window.addEventListener('scroll', schedule, { passive: true });
       window.addEventListener('resize', schedule, { passive: true });
+      window.addEventListener('wheel', onWheel, { passive: false });
+      window.addEventListener('touchstart', onTouchStart, { passive: true });
+      window.addEventListener('touchmove', onTouchMove, { passive: false });
+      window.addEventListener('keydown', onKeyDown);
     }, 80);
 
     return () => {
@@ -307,6 +487,10 @@ export function PaperScrollTransition({
       clearTimeout(timer);
       window.removeEventListener('scroll', schedule);
       window.removeEventListener('resize', schedule);
+      window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('keydown', onKeyDown);
 
       if (scrollRaf !== null) {
         cancelAnimationFrame(scrollRaf);
@@ -323,6 +507,7 @@ export function PaperScrollTransition({
       if (running) {
         unlockScroll();
         running = false;
+        transitionBus.active = false;
       }
 
       releaseEffect();

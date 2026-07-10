@@ -324,9 +324,9 @@ function SceneCard({
 
 function ScrollTransitionDemo() {
   const sections = [
-    { background: 'linear-gradient(180deg, #171112 0%, #060607 100%)', direction: 'Bottom to Top', title: 'Section One' },
-    { background: 'radial-gradient(circle at 50% 30%, #1a0f08 0%, #060607 100%)', direction: 'Top to Bottom', title: 'Section Two' },
-    { background: 'linear-gradient(180deg, #0b1210 0%, #060607 100%)', direction: 'Bottom to Top', title: 'Section Three' },
+    { background: 'linear-gradient(180deg, #171112 0%, #060607 100%)', direction: 'Bottom to Top', minHeight: '100vh', title: 'Section One' },
+    { background: 'radial-gradient(circle at 50% 30%, #1a0f08 0%, #060607 100%)', direction: 'Top to Bottom', minHeight: '200vh', title: 'Section Two (200vh)' },
+    { background: 'linear-gradient(180deg, #0b1210 0%, #060607 100%)', direction: 'Bottom to Top', minHeight: '60vh', title: 'Section Three (short)' },
   ];
 
   return (
@@ -339,7 +339,7 @@ function ScrollTransitionDemo() {
             background: section.background,
             display: 'flex',
             justifyContent: 'center',
-            minHeight: '100vh',
+            minHeight: section.minHeight,
           }}
         >
           <h1 style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', margin: 0 }}>{section.title}</h1>
