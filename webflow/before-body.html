@@ -3,7 +3,8 @@
 
      Replaces every previous animation embed. Structure:
        1. Libraries — GSAP + ScrollTrigger, loaded exactly once
-       2. Styles    — split text, button hover, hero/canvas, sections
+       2. Styles    — custom scrollbar, split text, button hover,
+                      hero/canvas, sections
        3. One module script
           3a. shared utils (splitText, setupButtonHover, colors, 3D refresh)
           3b. intro system — play-once section intros that fire on normal
@@ -17,6 +18,44 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
 
 <style>
+  /* ---------- custom scrollbar: forged iron & parchment ----------
+     Near-black track with a faint bone hairline, iron thumb edged in
+     parchment, deep crimson on hover to match the buttons. Square
+     corners echo the beveled gothic frames. */
+  html {
+    scrollbar-width: thin;               /* Firefox */
+    scrollbar-color: #282624 #0b0b0b;    /* Firefox: thumb track */
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #0b0b0b;
+    border-left: 1px solid rgba(245, 239, 229, 0.08);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #282624;
+    border: 1px solid rgba(245, 239, 229, 0.28);
+    border-radius: 0;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #6d1c1c;
+    border-color: rgba(245, 239, 229, 0.45);
+  }
+
+  ::-webkit-scrollbar-thumb:active {
+    background: #7d2222;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: #0b0b0b;
+  }
+
   /* ---------- split text ---------- */
   .split-char-wrap,
   .split-word-wrap,

@@ -164,7 +164,7 @@ export function PaperScrollTransition({
     let running = false;
     let lastScrollY = window.scrollY;
     let lastTouchY: number | null = null;
-    let previousOverflow = '';
+    let pinnedScrollY = 0;
 
     const ensureEffect = () => {
       if (effect || destroyed) {
@@ -233,14 +233,24 @@ export function PaperScrollTransition({
       event.preventDefault();
     };
 
+    // Repins the page against anything the input handlers can't intercept
+    // (scrollbar drags, middle-click autoscroll) while a transition plays.
+    // Unlike overflow: hidden, this keeps the scrollbar visible so the
+    // layout doesn't shift under the paper.
+    const holdScrollPosition = () => {
+      if (window.scrollY !== pinnedScrollY) {
+        window.scrollTo(0, pinnedScrollY);
+      }
+    };
+
     const lockScroll = () => {
-      previousOverflow = document.documentElement.style.overflow;
-      document.documentElement.style.overflow = 'hidden';
+      pinnedScrollY = window.scrollY;
+      window.addEventListener('scroll', holdScrollPosition, { passive: true });
       window.addEventListener('touchmove', preventTouchScroll, { passive: false });
     };
 
     const unlockScroll = () => {
-      document.documentElement.style.overflow = previousOverflow;
+      window.removeEventListener('scroll', holdScrollPosition);
       window.removeEventListener('touchmove', preventTouchScroll);
     };
 
@@ -309,7 +319,8 @@ export function PaperScrollTransition({
             ? window.scrollY + bottom
             : window.scrollY + bottom - window.innerHeight;
 
-        window.scrollTo(0, Math.max(0, target));
+        pinnedScrollY = Math.max(0, target);
+        window.scrollTo(0, pinnedScrollY);
 
         holdTimer = window.setTimeout(() => {
           holdTimer = null;
