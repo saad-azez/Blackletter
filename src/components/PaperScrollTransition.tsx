@@ -92,7 +92,13 @@ function findHostSection(element: Element | null): {
       return { element: current, matchedBy: 'section tag' };
     }
 
-    if (!firstSized && current.getBoundingClientRect().height > 0) {
+    // Never fall back to the page itself — an instance bound to <body> would
+    // treat the whole page as one section and hijack the first scroll.
+    if (
+      !firstSized &&
+      current !== document.body &&
+      current.getBoundingClientRect().height > 0
+    ) {
       firstSized = current;
     }
 
@@ -191,6 +197,8 @@ export function PaperScrollTransition({
     let bindLiftedFrom: number | null = null;
     let bindInstanceCount = 0;
     let bindLogged = false;
+    let noSectionWarned = false;
+    let liftChecked = false;
     let lastLoggedState = '';
     let transitionStartedAt = 0;
     let scrollRaf: number | null = null;
@@ -286,12 +294,6 @@ export function PaperScrollTransition({
         );
       }
 
-      if (bindLiftedFrom !== null) {
-        log('section is shorter than the viewport — lifted min-height to 100svh', {
-          originalHeightPx: Math.round(bindLiftedFrom),
-          viewportPx: window.innerHeight,
-        });
-      }
     };
 
     const measure = () => {
@@ -301,6 +303,15 @@ export function PaperScrollTransition({
         section = found.element;
 
         if (!section) {
+          if (!noSectionWarned) {
+            noSectionWarned = true;
+            log(
+              'no host section found — this instance is INACTIVE. Place the component inside a Section element, or add a data-curtain-section attribute to the wrapper that spans the section.',
+              undefined,
+              'warn',
+            );
+          }
+
           return null;
         }
 
@@ -309,26 +320,48 @@ export function PaperScrollTransition({
         bindInstanceCount = (hostRegistry.get(section) ?? 0) + 1;
         hostRegistry.set(section, bindInstanceCount);
 
-        // A boundary section must be able to fill the viewport on its own —
-        // otherwise its neighbours are visible beside it and no curtain can
-        // hide them. Lift short sections to viewport height.
-        if (section instanceof HTMLElement) {
-          const height = section.getBoundingClientRect().height;
-
-          if (height > 0 && height < window.innerHeight - 1) {
-            bindLiftedFrom = height;
-            section.style.minHeight = '100vh';
-            section.style.minHeight = '100svh';
-          }
+        if (section.getBoundingClientRect().height < 2) {
+          log(
+            'host section currently measures 0px tall — the boundary stays INERT until it has height. Fine if the section is hidden until the experience starts; if it never gains height, move data-curtain-section to the element that actually spans the section.',
+            undefined,
+            'warn',
+          );
         }
       }
 
       maybeLogBindSummary();
 
-      return section.getBoundingClientRect();
+      const rect = section.getBoundingClientRect();
+
+      // A boundary section must be able to fill the viewport on its own —
+      // otherwise its neighbours are visible beside it and no curtain can
+      // hide them. Lift short sections to viewport height. Deferred until the
+      // section has layout, so initially-hidden sections get measured for
+      // real once the experience reveals them.
+      if (!liftChecked && rect.height >= 2 && section instanceof HTMLElement) {
+        liftChecked = true;
+
+        if (rect.height < window.innerHeight - 1) {
+          bindLiftedFrom = rect.height;
+          section.style.minHeight = '100vh';
+          section.style.minHeight = '100svh';
+          log('section is shorter than the viewport — lifted min-height to 100svh', {
+            originalHeightPx: Math.round(rect.height),
+            viewportPx: window.innerHeight,
+          });
+
+          return section.getBoundingClientRect();
+        }
+      }
+
+      return rect;
     };
 
     const describeState = (rect: DOMRect, viewportHeight: number) => {
+      if (rect.height < 2) {
+        return 'INERT — section has no height (hidden, or the attribute is on a collapsed wrapper)';
+      }
+
       if (rect.bottom < -2) {
         return 'passed — section is fully above the viewport';
       }
@@ -490,7 +523,8 @@ export function PaperScrollTransition({
 
       const rect = measure();
 
-      if (!rect) {
+      // No section, or a section without layout (hidden) — never capture.
+      if (!rect || rect.height < 2) {
         return false;
       }
 
@@ -628,14 +662,6 @@ export function PaperScrollTransition({
 
       const viewportHeight = window.innerHeight;
       const clampWindow = viewportHeight * CLAMP_WINDOW_FRACTION;
-
-      // Sleep the WebGL context when the boundary is far away.
-      if (Math.abs(rect.bottom - viewportHeight) > viewportHeight * WAKE_DISTANCE_PX_FACTOR) {
-        releaseEffect();
-      } else {
-        ensureEffect();
-      }
-
       const state = describeState(rect, viewportHeight);
 
       if (debugEnabled() && state !== lastLoggedState) {
@@ -646,6 +672,20 @@ export function PaperScrollTransition({
           viewportPx: viewportHeight,
           scrollY: Math.round(scrollY),
         });
+      }
+
+      // A section without layout (hidden until the experience starts, or a
+      // collapsed wrapper) has no meaningful boundary — stay fully inert.
+      if (rect.height < 2) {
+        releaseEffect();
+        return;
+      }
+
+      // Sleep the WebGL context when the boundary is far away.
+      if (Math.abs(rect.bottom - viewportHeight) > viewportHeight * WAKE_DISTANCE_PX_FACTOR) {
+        releaseEffect();
+      } else {
+        ensureEffect();
       }
 
       if (
