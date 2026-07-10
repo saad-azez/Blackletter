@@ -344,7 +344,7 @@ function ScrollTransitionDemo() {
         >
           <h1 style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', margin: 0 }}>{section.title}</h1>
           <Suspense fallback={null}>
-            <PaperScrollTransition debug direction={section.direction} />
+            <PaperScrollTransition direction={section.direction} />
           </Suspense>
         </section>
       ))}

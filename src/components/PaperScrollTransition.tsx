@@ -54,6 +54,9 @@ const transitionBus = { active: false, cooldownUntil: 0 };
  */
 const hostRegistry = new Map<Element, number>();
 
+/** One breadcrumb per page load so it's obvious the component is running. */
+let announcedActive = false;
+
 function getComposedParent(element: Element | null): Element | null {
   if (!element) {
     return null;
@@ -184,6 +187,10 @@ export function PaperScrollTransition({
     let effect: InstanceType<typeof PaperCurtainEffect> | null = null;
     let section: Element | null = null;
     let sectionLabel = 'unbound';
+    let bindMatchedBy = 'none';
+    let bindLiftedFrom: number | null = null;
+    let bindInstanceCount = 0;
+    let bindLogged = false;
     let lastLoggedState = '';
     let transitionStartedAt = 0;
     let scrollRaf: number | null = null;
@@ -246,6 +253,47 @@ export function PaperScrollTransition({
       }
     };
 
+    // The bind summary is the most useful log, but debug may be switched on
+    // (via the global flag) long after mount — so it logs lazily, on the
+    // first measurement where logging is actually enabled.
+    const maybeLogBindSummary = () => {
+      if (bindLogged || !section || !debugEnabled()) {
+        return;
+      }
+
+      bindLogged = true;
+
+      const rect = section.getBoundingClientRect();
+
+      log('bound to host section', {
+        matchedBy: bindMatchedBy,
+        heightPx: Math.round(rect.height),
+        topPx: Math.round(rect.top),
+        bottomPx: Math.round(rect.bottom),
+        viewportPx: window.innerHeight,
+        scrollY: Math.round(window.scrollY),
+        direction: resolvedDirection,
+        durationS: resolvedDuration,
+        instancesOnThisSection: bindInstanceCount,
+        liftedFromPx: bindLiftedFrom,
+      });
+
+      if (bindInstanceCount > 1) {
+        log(
+          `${bindInstanceCount} transition instances are bound to this SAME section — each instance needs its own section. If your inner sections are divs inside a wrapper (e.g. experience-started), add a data-curtain-section attribute to each inner wrapper.`,
+          undefined,
+          'warn',
+        );
+      }
+
+      if (bindLiftedFrom !== null) {
+        log('section is shorter than the viewport — lifted min-height to 100svh', {
+          originalHeightPx: Math.round(bindLiftedFrom),
+          viewportPx: window.innerHeight,
+        });
+      }
+    };
+
     const measure = () => {
       if (!section) {
         const found = findHostSection(anchorRef.current);
@@ -257,49 +305,25 @@ export function PaperScrollTransition({
         }
 
         sectionLabel = describeElement(section);
-
-        const boundCount = (hostRegistry.get(section) ?? 0) + 1;
-
-        hostRegistry.set(section, boundCount);
-
-        const rect = section.getBoundingClientRect();
-
-        log('bound to host section', {
-          matchedBy: found.matchedBy,
-          heightPx: Math.round(rect.height),
-          topPx: Math.round(rect.top),
-          bottomPx: Math.round(rect.bottom),
-          viewportPx: window.innerHeight,
-          scrollY: Math.round(window.scrollY),
-          direction: resolvedDirection,
-          durationS: resolvedDuration,
-          instancesOnThisSection: boundCount,
-        });
-
-        if (boundCount > 1) {
-          log(
-            `${boundCount} transition instances are bound to this SAME section — each instance needs its own section. If your inner sections are divs inside a wrapper (e.g. experience-started), add a data-curtain-section attribute to each inner wrapper.`,
-            undefined,
-            'warn',
-          );
-        }
+        bindMatchedBy = found.matchedBy;
+        bindInstanceCount = (hostRegistry.get(section) ?? 0) + 1;
+        hostRegistry.set(section, bindInstanceCount);
 
         // A boundary section must be able to fill the viewport on its own —
         // otherwise its neighbours are visible beside it and no curtain can
         // hide them. Lift short sections to viewport height.
         if (section instanceof HTMLElement) {
-          const height = rect.height;
+          const height = section.getBoundingClientRect().height;
 
           if (height > 0 && height < window.innerHeight - 1) {
+            bindLiftedFrom = height;
             section.style.minHeight = '100vh';
             section.style.minHeight = '100svh';
-            log('section is shorter than the viewport — lifted min-height to 100svh', {
-              originalHeightPx: Math.round(height),
-              viewportPx: window.innerHeight,
-            });
           }
         }
       }
+
+      maybeLogBindSummary();
 
       return section.getBoundingClientRect();
     };
@@ -614,7 +638,7 @@ export function PaperScrollTransition({
 
       const state = describeState(rect, viewportHeight);
 
-      if (state !== lastLoggedState) {
+      if (debugEnabled() && state !== lastLoggedState) {
         lastLoggedState = state;
         log(`state → ${state}`, {
           topPx: Math.round(rect.top),
@@ -661,6 +685,13 @@ export function PaperScrollTransition({
 
     // Give Webflow's slot/host layout a beat to settle before measuring.
     const timer = setTimeout(() => {
+      if (!announcedActive) {
+        announcedActive = true;
+        console.info(
+          '[PaperScroll] paper scroll transitions are active on this page. For detailed per-section logs, set __BLACKLETTER_PAPER_DEBUG__ = true in this console and scroll (or turn on the Debug Logs prop).',
+        );
+      }
+
       measure();
       update();
       window.addEventListener('scroll', schedule, { passive: true });
