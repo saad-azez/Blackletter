@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import PaperCurtainEffect from './BlackletterPaperCurtain.mjs';
 
 export type PaperScrollDirection = 'Bottom to Top' | 'Top to Bottom';
@@ -139,6 +140,11 @@ export function PaperScrollTransition({
 
     if (!canvas) {
       return undefined;
+    }
+
+    // Track the mobile browser chrome expanding/collapsing where supported.
+    if (typeof CSS !== 'undefined' && CSS.supports?.('height', '100dvh')) {
+      canvas.style.height = '100dvh';
     }
 
     // Cover anchors the sheet on the edge it sweeps in from; the reveal swaps
@@ -539,20 +545,29 @@ export function PaperScrollTransition({
     };
   }, [resolvedColor, resolvedDirection, resolvedDuration]);
 
+  // The canvas is portalled to <body>: any ancestor with a transform,
+  // will-change or filter would become the containing block for a fixed
+  // element and shrink the sheet to that box instead of the viewport.
   return (
     <div ref={anchorRef} style={{ height: 0, width: 0 }}>
-      <canvas
-        ref={canvasRef}
-        style={{
-          height: '100%',
-          inset: 0,
-          opacity: 0,
-          pointerEvents: 'none',
-          position: 'fixed',
-          width: '100%',
-          zIndex: resolvedZIndex,
-        }}
-      />
+      {typeof document === 'undefined'
+        ? null
+        : createPortal(
+            <canvas
+              ref={canvasRef}
+              style={{
+                height: '100vh',
+                left: 0,
+                opacity: 0,
+                pointerEvents: 'none',
+                position: 'fixed',
+                top: 0,
+                width: '100vw',
+                zIndex: resolvedZIndex,
+              }}
+            />,
+            document.body,
+          )}
     </div>
   );
 }

@@ -343,9 +343,13 @@ function ScrollTransitionDemo() {
           }}
         >
           <h1 style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', margin: 0 }}>{section.title}</h1>
-          <Suspense fallback={null}>
-            <PaperScrollTransition direction={section.direction} />
-          </Suspense>
+          {/* Transformed wrapper mimics Webflow's animated containers, which
+              would trap a fixed canvas — the portal must escape it. */}
+          <div style={{ transform: 'translateZ(0)' }}>
+            <Suspense fallback={null}>
+              <PaperScrollTransition direction={section.direction} />
+            </Suspense>
+          </div>
         </section>
       ))}
       <section
