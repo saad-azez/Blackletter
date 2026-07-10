@@ -6,7 +6,7 @@ import { PaperScrollTransition } from './PaperScrollTransition';
 const paperScrollTransitionWebflow = declareComponent(PaperScrollTransition, {
   name: 'Paper Scroll Transition',
   description:
-    'Drop inside a Section: as that section scrolls out, a torn-paper curtain sweeps across the screen and reveals the next section.',
+    'Drop inside a Section: scrolling past its end plays the torn-paper page transition and reveals the next section.',
   group: 'Media',
   options: {
     ssr: false,
@@ -22,6 +22,14 @@ const paperScrollTransitionWebflow = declareComponent(PaperScrollTransition, {
       name: 'Paper Color',
       defaultValue: '#1d1d1b',
       tooltip: 'CSS colour of the paper sheet and torn edge.',
+    }),
+    duration: props.Number({
+      name: 'Duration (s)',
+      defaultValue: 2.2,
+      decimals: 1,
+      min: 0.6,
+      max: 6,
+      tooltip: 'Total transition time in seconds, matching the Start the Experience curtain by default.',
     }),
     zIndex: props.Number({
       name: 'Z Index',
