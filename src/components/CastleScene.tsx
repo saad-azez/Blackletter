@@ -1447,28 +1447,35 @@ export function CastleScene({
 
   return (
     <section className="castle-scene-shell" ref={sectionRef}>
-      <img
-        ref={skyImageRef}
+      {/* Clip the oversized parallax layer so its drift never widens the page. */}
+      <div
         aria-hidden="true"
-        alt=""
-        src={resolvedSkyTextureUrl}
-        decoding="async"
-        loading="eager"
         style={{
-          height: '100%',
           inset: 0,
-          objectFit: 'cover',
-          objectPosition: 'center top',
-          opacity: 0,
+          overflow: 'hidden',
           pointerEvents: 'none',
           position: 'absolute',
-          transform: 'scale(1.05)',
-          userSelect: 'none',
-          width: '100%',
-          willChange: 'transform',
           zIndex: 0,
         }}
-      />
+      >
+        <img
+          ref={skyImageRef}
+          alt=""
+          src={resolvedSkyTextureUrl}
+          decoding="async"
+          loading="eager"
+          style={{
+            height: '100%',
+            objectFit: 'cover',
+            objectPosition: 'center top',
+            opacity: 0,
+            transform: 'scale(1.05)',
+            userSelect: 'none',
+            width: '100%',
+            willChange: 'transform',
+          }}
+        />
+      </div>
       <div
         className="castle-scene-viewport"
         style={{
@@ -1549,29 +1556,36 @@ export function CastleScene({
           />
         ) : null}
       </div>
-      <img
-        ref={rocksImageRef}
+      <div
         aria-hidden="true"
-        alt=""
-        src={rocksBackgroundImage}
-        decoding="async"
-        loading="lazy"
         style={{
           bottom: 0,
           height: '85vh',
           left: 0,
-          objectFit: 'cover',
-          objectPosition: 'center bottom',
+          overflow: 'hidden',
           pointerEvents: 'none',
           position: 'absolute',
           right: 0,
-          transform: 'scale(1.06)',
-          userSelect: 'none',
-          width: '100%',
-          willChange: 'transform',
           zIndex: 4,
         }}
-      />
+      >
+        <img
+          ref={rocksImageRef}
+          alt=""
+          src={rocksBackgroundImage}
+          decoding="async"
+          loading="lazy"
+          style={{
+            height: '100%',
+            objectFit: 'cover',
+            objectPosition: 'center bottom',
+            transform: 'scale(1.06)',
+            userSelect: 'none',
+            width: '100%',
+            willChange: 'transform',
+          }}
+        />
+      </div>
     </section>
   );
 }
