@@ -1,5 +1,5 @@
 import { OrthographicCamera, PerspectiveCamera, useGLTF } from '@react-three/drei';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import type GUI from 'lil-gui';
 import {
   lazy,
@@ -9,11 +9,11 @@ import {
   useMemo,
   useRef,
   useState,
-  type RefObject,
 } from 'react';
 import * as THREE from 'three';
 
 import charactersBackgroundTextureUrl from '../assets/Textures/characters-background.jpeg';
+import { CameraParallaxRig, type CameraRigDomLayer } from './CameraParallaxRig';
 import {
   backCharacterTransformDefaults,
   backCharacterTransformMobileDefaults,
@@ -122,13 +122,10 @@ interface CharacterSceneCameraProps {
 }
 
 interface CharacterSceneGroupProps {
-  animationEnabled: boolean;
   characterModelUrl: string;
   characterTransform: CharacterTransform;
   modelScale: number;
   onPreparedSizeChange: (size: THREE.Vector3) => void;
-  pointerTarget: RefObject<THREE.Vector2>;
-  scrollTarget: RefObject<number>;
   viewport: 'mobile' | 'tablet' | 'desktop';
 }
 
@@ -357,6 +354,7 @@ export function CharacterScene({
   const viewportSizeRef = useRef<'mobile' | 'tablet' | 'desktop'>('desktop');
   const pointerTarget = useRef(new THREE.Vector2());
   const scrollTarget = useRef(0);
+  const backgroundImageRef = useRef<HTMLImageElement>(null);
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
@@ -516,7 +514,12 @@ export function CharacterScene({
 
     const updateScroll = () => {
       const rect = element.getBoundingClientRect();
-      scrollTarget.current = Math.max(0, -rect.top) / Math.max(rect.height, 1);
+      const viewportHeight = window.innerHeight || 1;
+      const height = rect.height >= 2 ? rect.height : viewportHeight;
+      const enter = THREE.MathUtils.clamp(rect.top / viewportHeight, 0, 1);
+      const exit = THREE.MathUtils.clamp(-rect.top / height, 0, 1);
+
+      scrollTarget.current = exit - enter;
     };
 
     updateScroll();
@@ -1194,6 +1197,12 @@ export function CharacterScene({
   ]);
 
   const activeBackgroundUrl = resolvedBackgroundImageUrl || charactersBackgroundTextureUrl;
+  // Kept small: the 3D back character is aligned to a feature of this image, so the
+  // oversize (and therefore the drift range) must stay subtle to preserve that mapping.
+  const domParallaxLayers = useMemo<CameraRigDomLayer[]>(
+    () => [{ element: backgroundImageRef, lift: 12, panX: 8, panY: 5, scale: 1.035 }],
+    [],
+  );
 
   return (
     <section
@@ -1210,6 +1219,7 @@ export function CharacterScene({
     >
       {backgroundEnabled && (
         <img
+          ref={backgroundImageRef}
           alt=""
           aria-hidden="true"
           onLoad={(e) => {
@@ -1227,7 +1237,9 @@ export function CharacterScene({
             pointerEvents: 'none',
             position: 'absolute',
             top: 0,
+            transform: 'scale(1.035)',
             width: '100%',
+            willChange: 'transform',
           }}
         />
       )}
@@ -1246,6 +1258,20 @@ export function CharacterScene({
           mode={cameraMode}
           position={cameraPosition}
           target={cameraTarget}
+        />
+        <CameraParallaxRig
+          basePosition={cameraPosition}
+          baseTarget={cameraTarget}
+          domLayers={domParallaxLayers}
+          enabled={!orbitEnabled}
+          orbitPitch={0.06}
+          orbitYaw={0.13}
+          panX={-0.13}
+          panY={-0.06}
+          pointerEnabled={animationActive}
+          pointerTarget={pointerTarget}
+          scrollLift={0.85}
+          scrollTarget={scrollTarget}
         />
         {showGui ? (
           <Suspense fallback={null}>
@@ -1287,13 +1313,10 @@ export function CharacterScene({
           screenYTop={viewportSize === 'desktop' ? 1.0 : undefined}
         />
         <CharacterSceneGroup
-          animationEnabled={animationActive}
           characterModelUrl={resolvedCharacterModelUrl}
           characterTransform={characterTransform}
           modelScale={modelScale}
           onPreparedSizeChange={setPreparedSceneSize}
-          pointerTarget={pointerTarget}
-          scrollTarget={scrollTarget}
           viewport={viewportSize}
         />
       </Canvas>
@@ -1434,67 +1457,22 @@ function CharacterStage({
 }
 
 function CharacterSceneGroup({
-  animationEnabled,
   characterModelUrl,
   characterTransform,
   modelScale,
   onPreparedSizeChange,
-  pointerTarget,
-  scrollTarget,
   viewport,
 }: CharacterSceneGroupProps) {
-  const groupRef = useRef<THREE.Group>(null);
-  const scrollSmooth = useRef(0);
-
-  useEffect(() => {
-    if (!groupRef.current) return;
-    groupRef.current.position.set(0, 0, 0);
-    groupRef.current.rotation.set(0, 0, 0);
-  }, []);
-
-  useFrame((_, delta) => {
-    if (!groupRef.current) return;
-
-    scrollSmooth.current = THREE.MathUtils.damp(scrollSmooth.current, scrollTarget.current, 0.8, delta);
-    const sp = scrollSmooth.current;
-
-    if (!animationEnabled) {
-      groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, sp * 0.1, 3.2, delta);
-      groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, -sp * 0.28, 3.2, delta);
-      groupRef.current.position.z = THREE.MathUtils.damp(groupRef.current.position.z, 0, 3, delta);
-      groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, sp * 0.012, 3.4, delta);
-      groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, sp * 0.045, 3.4, delta);
-      groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, 0, 3.2, delta);
-      return;
-    }
-
-    const { x, y } = pointerTarget.current;
-
-    groupRef.current.position.x = THREE.MathUtils.damp(groupRef.current.position.x, x * 0.16 + sp * 0.1, 3.2, delta);
-    groupRef.current.position.y = THREE.MathUtils.damp(groupRef.current.position.y, y * 0.08 - sp * 0.28, 3.2, delta);
-    groupRef.current.position.z = THREE.MathUtils.damp(
-      groupRef.current.position.z,
-      -Math.abs(x) * 0.05 - Math.abs(y) * 0.03,
-      3,
-      delta,
-    );
-    groupRef.current.rotation.x = THREE.MathUtils.damp(groupRef.current.rotation.x, -y * 0.08 + sp * 0.012, 3.4, delta);
-    groupRef.current.rotation.y = THREE.MathUtils.damp(groupRef.current.rotation.y, x * 0.16 + sp * 0.045, 3.4, delta);
-    groupRef.current.rotation.z = THREE.MathUtils.damp(groupRef.current.rotation.z, x * y * -0.035, 3.2, delta);
-  });
-
   const isMobile = viewport === 'mobile';
 
   return (
-    <group ref={groupRef}>
-      <CharacterStage
-        characterModelUrl={characterModelUrl}
-        characterTransform={isMobile ? { ...characterTransform, ...characterTransformMobileDefaults } : characterTransform}
-        modelScale={modelScale}
-        onPreparedSizeChange={onPreparedSizeChange}
-        scalePositions={viewport === 'tablet'}
-      />
-    </group>
+    <CharacterStage
+      characterModelUrl={characterModelUrl}
+      characterTransform={isMobile ? { ...characterTransform, ...characterTransformMobileDefaults } : characterTransform}
+      modelScale={modelScale}
+      onPreparedSizeChange={onPreparedSizeChange}
+      scalePositions={viewport === 'tablet'}
+    />
   );
 }
 

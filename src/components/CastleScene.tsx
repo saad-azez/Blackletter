@@ -7,8 +7,10 @@ import {
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import type GUI from 'lil-gui';
 import gsap from 'gsap';
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+
+import { CameraParallaxRig, type CameraRigDomLayer } from './CameraParallaxRig';
 
 
 import rocksMobileTextureUrl from '../assets/Textures/rocks-mobile.png';
@@ -131,7 +133,6 @@ interface GuiControllers {
 }
 
 interface CastleModelProps {
-  animationEnabled: boolean;
   castleTransform: CastleTransform;
   floorTransform: CastleFloorTransform;
   floorLight: FloorLightSettings;
@@ -140,7 +141,6 @@ interface CastleModelProps {
   modelScale: number;
   modelUrl: string;
   onFloorScreenRectChange: (screenRect: FloorScreenRect | null) => void;
-  pointerTarget: MutableRefObject<THREE.Vector2>;
   towerModelUrl: string;
   towerTransforms: TowerTransform[];
 }
@@ -544,7 +544,9 @@ export function CastleScene({
 }: CastleSceneProps) {
   const sectionRef = useRef<HTMLElement>(null);
   const skyImageRef = useRef<HTMLImageElement>(null);
+  const rocksImageRef = useRef<HTMLImageElement>(null);
   const pointerTarget = useRef(new THREE.Vector2());
+  const scrollTarget = useRef(0);
   const guiRootRef = useRef<HTMLDivElement>(null);
   const guiRef = useRef<GUI | null>(null);
   const guiStateRef = useRef<GuiState | null>(null);
@@ -715,6 +717,42 @@ export function CastleScene({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
+
+  useEffect(() => {
+    const element = sectionRef.current;
+
+    if (!element) {
+      return undefined;
+    }
+
+    const updateScroll = () => {
+      const rect = element.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || 1;
+      // Hidden Webflow wrappers report height 0; treat them as one viewport tall.
+      const height = rect.height >= 2 ? rect.height : viewportHeight;
+      const enter = THREE.MathUtils.clamp(rect.top / viewportHeight, 0, 1);
+      const exit = THREE.MathUtils.clamp(-rect.top / height, 0, 1);
+
+      scrollTarget.current = exit - enter;
+    };
+
+    updateScroll();
+    window.addEventListener('scroll', updateScroll, { passive: true });
+    window.addEventListener('resize', updateScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', updateScroll);
+      window.removeEventListener('resize', updateScroll);
+    };
+  }, []);
+
+  const domParallaxLayers = useMemo<CameraRigDomLayer[]>(
+    () => [
+      { element: skyImageRef, lift: 10, panX: 8, panY: 5, scale: 1.05 },
+      { element: rocksImageRef, lift: 14, panX: 16, panY: 8, scale: 1.06 },
+    ],
+    [],
+  );
 
   useEffect(() => {
     if (!showGui || !guiRootRef.current) {
@@ -1424,8 +1462,10 @@ export function CastleScene({
           opacity: 0,
           pointerEvents: 'none',
           position: 'absolute',
+          transform: 'scale(1.05)',
           userSelect: 'none',
           width: '100%',
+          willChange: 'transform',
           zIndex: 0,
         }}
       />
@@ -1449,6 +1489,20 @@ export function CastleScene({
             position={cameraPosition}
             target={cameraTarget}
           />
+          <CameraParallaxRig
+            basePosition={cameraPosition}
+            baseTarget={cameraTarget}
+            domLayers={domParallaxLayers}
+            enabled={!cameraLocked}
+            orbitPitch={0.07}
+            orbitYaw={0.15}
+            panX={-0.14}
+            panY={-0.07}
+            pointerEnabled={animationActive}
+            pointerTarget={pointerTarget}
+            scrollLift={1}
+            scrollTarget={scrollTarget}
+          />
           {showGui ? (
             <Suspense fallback={null}>
               <DebugOrbitControls
@@ -1469,7 +1523,6 @@ export function CastleScene({
           ) : null}
           <CastleLighting enabled={lightsEnabled} />
           <CastleModel
-            animationEnabled={animationActive}
             castleTransform={castleTransform}
             floorTransform={floorTransform}
             floorLight={floorLight}
@@ -1479,7 +1532,6 @@ export function CastleScene({
             modelScale={modelScale}
             modelUrl={resolvedCastleModelUrl}
             onFloorScreenRectChange={setFloorScreenRect}
-            pointerTarget={pointerTarget}
             towerModelUrl={resolvedTowerModelUrl}
             towerTransforms={towerTransforms}
           />
@@ -1498,6 +1550,7 @@ export function CastleScene({
         ) : null}
       </div>
       <img
+        ref={rocksImageRef}
         aria-hidden="true"
         alt=""
         src={rocksBackgroundImage}
@@ -1512,8 +1565,10 @@ export function CastleScene({
           pointerEvents: 'none',
           position: 'absolute',
           right: 0,
+          transform: 'scale(1.06)',
           userSelect: 'none',
           width: '100%',
+          willChange: 'transform',
           zIndex: 4,
         }}
       />
@@ -1536,7 +1591,6 @@ function CastleLighting({ enabled }: { enabled: boolean }) {
 }
 
 function CastleModel({
-  animationEnabled,
   castleTransform,
   floorTransform,
   floorLight,
@@ -1545,14 +1599,12 @@ function CastleModel({
   modelScale,
   modelUrl,
   onFloorScreenRectChange,
-  pointerTarget,
   towerModelUrl,
   towerTransforms,
 }: CastleModelProps) {
   const groupRef = useRef<THREE.Group>(null);
   const entranceRef = useRef({ y: -3.0, scale: 0.85 });
   const entranceActiveRef = useRef(true);
-  const smoothRef = useRef({ px: 0, py: -3.0, pz: 0, rx: 0, ry: 0, rz: 0 });
   const { camera, size } = useThree();
   const gltf = useGLTF(modelUrl, dracoDecoderPath);
   const towerGltf = useGLTF(towerModelUrl, dracoDecoderPath);
@@ -1618,16 +1670,9 @@ function CastleModel({
   const detachedTowers = responsiveTowerTransforms.slice(1);
 
   useEffect(() => {
-    const s = smoothRef.current;
-    s.px = 0; s.py = entranceRef.current.y; s.pz = 0;
-    s.rx = 0; s.ry = 0; s.rz = 0;
-  }, [animationEnabled, preparedCastle.root, preparedTower]);
-
-  useEffect(() => {
     entranceActiveRef.current = true;
     entranceRef.current.y = -3.5;
     entranceRef.current.scale = 0.82;
-    smoothRef.current.py = -3.5;
 
     const tween = gsap.to(entranceRef.current, {
       y: 0,
@@ -1644,35 +1689,15 @@ function CastleModel({
     };
   }, []);
 
-  useFrame((_state, delta) => {
+  useFrame(() => {
     if (!groupRef.current) {
       return;
     }
 
-    const dt = Math.min(delta, 1 / 20);
-    const alpha = Math.min(1, 6 * dt);
-
     const entranceY = entranceActiveRef.current ? entranceRef.current.y : 0;
     const entranceScale = entranceActiveRef.current ? entranceRef.current.scale : 1;
 
-    const { x, y } = pointerTarget.current;
-    const tpx = animationEnabled ? x * 0.16 : 0;
-    const tpy = animationEnabled ? y * 0.08 + entranceY : entranceY;
-    const tpz = animationEnabled ? -Math.abs(x) * 0.05 - Math.abs(y) * 0.03 : 0;
-    const trx = animationEnabled ? -y * 0.08 : 0;
-    const tRY = animationEnabled ? x * 0.16 : 0;
-    const trz = animationEnabled ? x * y * -0.035 : 0;
-
-    const s = smoothRef.current;
-    s.px += (tpx - s.px) * alpha;
-    s.py += (tpy - s.py) * alpha;
-    s.pz += (tpz - s.pz) * alpha;
-    s.rx += (trx - s.rx) * alpha;
-    s.ry += (tRY - s.ry) * alpha;
-    s.rz += (trz - s.rz) * alpha;
-
-    groupRef.current.position.set(s.px, s.py, s.pz);
-    groupRef.current.rotation.set(s.rx, s.ry, s.rz);
+    groupRef.current.position.set(0, entranceY, 0);
     groupRef.current.scale.setScalar(entranceScale);
   });
 
