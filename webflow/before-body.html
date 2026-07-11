@@ -354,7 +354,36 @@
        scroll event, so the same trigger catches both). No scrubbing:
        scrubbed animations freeze inside curtain-gated sections
        because scroll never moves there.
+
+       Paper gate: the page glides to the next section while the
+       sheet still covers the viewport, which fires these triggers
+       too early. Intros triggered during a paper transition are
+       held and only play once the sheet has fully cleared.
        ============================================================ */
+
+    let paperTransitionActive = false;
+    let paperFailsafeTimer = 0;
+    const heldIntros = [];
+
+    function flushHeldIntros() {
+      while (heldIntros.length) heldIntros.shift()();
+    }
+
+    window.addEventListener("blackletter:paper-transition", (event) => {
+      const phase = event.detail && event.detail.phase;
+      clearTimeout(paperFailsafeTimer);
+      if (phase === "start") {
+        paperTransitionActive = true;
+        // Never hold reveals hostage if an "end" gets lost somehow.
+        paperFailsafeTimer = setTimeout(() => {
+          paperTransitionActive = false;
+          flushHeldIntros();
+        }, 10000);
+      } else {
+        paperTransitionActive = false;
+        flushHeldIntros();
+      }
+    });
 
     function registerIntro(sectionEl, timeline, start = "top 70%") {
       if (!sectionEl || !timeline) return;
@@ -364,6 +393,10 @@
         if (played) return;
         // Hidden sections (before the experience starts) wait their turn.
         if (sectionEl.getBoundingClientRect().height < 2) return;
+        if (paperTransitionActive) {
+          if (heldIntros.indexOf(tryPlay) === -1) heldIntros.push(tryPlay);
+          return;
+        }
         played = true;
         timeline.play();
       };

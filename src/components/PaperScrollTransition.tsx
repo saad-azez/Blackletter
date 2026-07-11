@@ -50,6 +50,16 @@ const WAKE_DISTANCE_PX_FACTOR = 1.75;
  */
 const transitionBus = { active: false, cooldownUntil: 0 };
 
+/**
+ * Page-level code (e.g. GSAP section intros in Webflow custom code) listens
+ * for these to hold content reveals until the sheet has fully cleared.
+ */
+function emitTransitionPhase(phase: 'start' | 'end', towards: 'next' | 'previous') {
+  window.dispatchEvent(
+    new CustomEvent('blackletter:paper-transition', { detail: { phase, towards } }),
+  );
+}
+
 function getComposedParent(element: Element | null): Element | null {
   if (!element) {
     return null;
@@ -281,6 +291,8 @@ export function PaperScrollTransition({
       tweenRaf = requestAnimationFrame(step);
     };
 
+    let runningTowards: 'next' | 'previous' = 'next';
+
     const finishTransition = () => {
       canvas.style.opacity = '0';
       unlockScroll();
@@ -288,6 +300,7 @@ export function PaperScrollTransition({
       transitionBus.active = false;
       transitionBus.cooldownUntil = performance.now() + RETRIGGER_COOLDOWN_MS;
       lastScrollY = window.scrollY;
+      emitTransitionPhase('end', runningTowards);
     };
 
     const runTransition = (towards: 'next' | 'previous') => {
@@ -300,11 +313,13 @@ export function PaperScrollTransition({
       const coverFlip = towards === 'next' ? downCoverFlip : !downCoverFlip;
 
       running = true;
+      runningTowards = towards;
       transitionBus.active = true;
       lockScroll();
       effect.setAxisFlip(coverFlip);
       effect.state.progress = 0;
       canvas.style.opacity = '1';
+      emitTransitionPhase('start', towards);
 
       tweenProgress(0, 1, () => {
         if (destroyed || !effect || !section) {
@@ -561,6 +576,7 @@ export function PaperScrollTransition({
         unlockScroll();
         running = false;
         transitionBus.active = false;
+        emitTransitionPhase('end', runningTowards);
       }
 
       releaseEffect();
