@@ -1,0 +1,279 @@
+/* ============================================================
+   BLACKLETTER — page styles (single source, served via jsDelivr)
+   Loaded by the before-</body> snippet in Webflow. Everything
+   that used to live in inline <style> blocks (before-body and
+   the shop/subscribe/footer embeds) lives here.
+   ============================================================ */
+
+/* ---------- custom scrollbar: forged iron & parchment ----------
+   Near-black track with a faint bone hairline, iron thumb edged in
+   parchment, deep crimson on hover to match the buttons. Square
+   corners echo the beveled gothic frames. */
+html {
+  scrollbar-width: thin;               /* Firefox */
+  scrollbar-color: #282624 #0b0b0b;    /* Firefox: thumb track */
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0b0b0b;
+  border-left: 1px solid rgba(245, 239, 229, 0.08);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #282624;
+  border: 1px solid rgba(245, 239, 229, 0.28);
+  border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6d1c1c;
+  border-color: rgba(245, 239, 229, 0.45);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: #7d2222;
+}
+
+::-webkit-scrollbar-corner {
+  background: #0b0b0b;
+}
+
+/* ---------- split text ---------- */
+.split-char-wrap,
+.split-word-wrap,
+.button-word-wrap {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+  padding-bottom: 0.15em;
+  margin-bottom: -0.15em;
+}
+
+.split-char,
+.split-word,
+.button-word {
+  display: inline-block;
+  will-change: transform, opacity;
+}
+
+/* ---------- button hover ---------- */
+.button.hero,
+.button.makers {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.button-hover-label {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.button-text-row {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.button.hero img,
+.button.hero svg,
+.button.hero [data-button-image],
+.button.makers img,
+.button.makers svg,
+.button.makers [data-button-image] {
+  position: relative;
+  z-index: 2;
+}
+
+/* ---------- hero + paper canvas ---------- */
+.hero-section {
+  position: relative;
+  width: 100%;
+  min-height: 100dvh;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.hero-section > .frame {
+  position: relative;
+  margin: 0 auto;
+  overflow: hidden;
+  transform-origin: center center;
+}
+
+.page-canvas-wrap {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  z-index: 10002 !important;
+  display: block !important;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+#above-canvas,
+.above-canvas {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
+}
+
+.scripture-card,
+.scripture-letter {
+  transform-origin: center center;
+}
+
+/* ---------- frames ---------- */
+.frame { corner-shape: bevel; }
+.frame-card { corner-shape: bevel; }
+
+/* ---------- makers section ---------- */
+.makers-section .bg-img,
+.makers-section .makers-scripture,
+.makers-section .discord,
+.makers-section .rocket-man {
+  will-change: transform, opacity;
+}
+
+.makers-section .rocket-man,
+.makers-section .discord {
+  transform-origin: center center;
+}
+
+/* ---------- battle section ---------- */
+.battle-scene {
+  position: relative;
+  overflow-x: clip;
+}
+
+.battle-scene .scripture-card,
+.battle-scene .scripture-head,
+.battle-scene .scripture-letter,
+.battle-scene .scripture-para {
+  will-change: transform, opacity;
+}
+
+/* ---------- shop section ---------- */
+.shop-section {
+  position: relative;
+  overflow-x: clip;
+}
+
+.shop-section .bg-img,
+.shop-section .heading-big-v,
+.shop-section .paragraph,
+.shop-section .button.hero,
+.shop-section .group-line,
+.shop-section .collection-list-wrapper {
+  will-change: transform, opacity;
+}
+
+.shop-section .group-line {
+  transform-origin: left center;
+}
+
+.shop-section .collection-item {
+  will-change: transform;
+}
+
+@media (min-width: 992px) {
+  .shop-cards { overflow: visible !important; }
+  .collection-list-wrapper { overflow: visible !important; }
+  .collection-list { overflow: visible !important; }
+}
+
+@media (max-width: 991px) {
+  .shop-cards { overflow: visible !important; }
+  .collection-list-wrapper { overflow: visible !important; }
+  .collection-list { overflow: visible !important; }
+}
+
+/* ---------- subscribe section ---------- */
+.subscribe-section { position: relative; overflow-x: clip; }
+
+.subscribe-div {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  width: max-content;
+  will-change: transform;
+}
+.subscribe-div > * { flex-shrink: 0; }
+
+.subscribe-section .script-text-image-div,
+.subscribe-section .script-text-para,
+.subscribe-section .text-field,
+.subscribe-section .button-form {
+  will-change: transform, opacity;
+}
+
+/* rolling label for the submit input */
+.button-form-hover-wrap {
+  position: relative;
+  display: inline-grid;
+}
+.button-form-hover-wrap > .button-form {
+  grid-area: 1 / 1;
+  width: 100%;
+}
+.button-form-overlay {
+  grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+.button-form-overlay .button-text-row {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  white-space: nowrap;
+  will-change: transform;
+}
+.button-form-overlay .button-word-wrap {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+  padding-bottom: 0.15em;
+  margin-bottom: -0.15em;
+}
+.button-form-overlay .button-word {
+  display: inline-block;
+  will-change: transform, opacity;
+}
+
+/* ---------- footer section ---------- */
+.footer-section { position: relative; overflow-x: clip; }
+
+.footer-section .scripture-head,
+.footer-section .button.hero,
+.footer-section .footer-para,
+.footer-section .footer-logo-text,
+.footer-section .social-logo {
+  will-change: transform, opacity;
+}
+.footer-section .footer-logo-text {
+  transform-origin: center center;
+  display: inline-block;
+}
