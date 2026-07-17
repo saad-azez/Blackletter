@@ -880,6 +880,169 @@
     }
 
     /* ============================================================
+       3e. FOOTER LOOP — scrolling past the end of the page closes
+           the theatre paper curtain (the BlackletterPaperCurtain
+           look from "Start the Experience"), returns to the top
+           under full cover, and tears open again on the hero. The
+           site scrolls in an endless loop.
+
+           Requires the Paper Scroll Transition component to be
+           REMOVED from the footer section — this replaces it there.
+           Announces itself on blackletter:paper-transition, so all
+           section boundaries and reveals hold while it runs.
+       ============================================================ */
+
+    function initFooterLoop() {
+      const footer = document.querySelector(".footer-section");
+      if (!footer) return;
+
+      const CLOSE_DUR = 0.9;   // curtain halves sweeping shut
+      const GLIDE_DUR = 0.35;  // scroll gliding home under full cover
+      const OPEN_DUR = 1.3;    // the tear-open reveal on the hero
+      const COOLDOWN_MS = 600;
+
+      const paperOne = getCSSColor("--paper-color-one", "#252525");
+      const paperTwo = getCSSColor("--paper-color-two", "#ffffff");
+
+      let canvas = null;
+      let effect = null;
+      let running = false;
+      let cooldownUntil = 0;
+      let pinnedY = 0;
+
+      function ensureEffect() {
+        if (effect) return true;
+        try {
+          canvas = document.createElement("canvas");
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          canvas.style.cssText =
+            "position:fixed;top:0;left:0;width:100vw;height:100vh;" +
+            "opacity:0;pointer-events:none;z-index:200;";
+          if (window.CSS && CSS.supports && CSS.supports("height", "100dvh")) {
+            canvas.style.height = "100dvh";
+          }
+          document.body.appendChild(canvas);
+          effect = new PaperCurtainEffect(canvas, {
+            color: paperTwo,
+            background: paperOne,
+            backgroundOpacity: 0,
+            style: "theatre",
+            showLoader: false,
+            grainOpacity: 1.0,
+            warmTint: 0.6,
+            manageContainerBackground: false,
+            registerGlobal: false,
+          });
+          return true;
+        } catch (err) {
+          effect = null;
+          return false;
+        }
+      }
+
+      window.addEventListener("resize", () => {
+        if (!effect || !canvas) return;
+        effect.canvasSize = { width: window.innerWidth, height: window.innerHeight };
+        try { effect._resize(); } catch (err) {}
+      });
+
+      const holdScroll = () => {
+        if (window.scrollY !== pinnedY) window.scrollTo(0, pinnedY);
+      };
+
+      function atPageEnd() {
+        return (
+          footer.getBoundingClientRect().height > 2 &&
+          window.innerHeight + window.scrollY >=
+            document.documentElement.scrollHeight - 2
+        );
+      }
+
+      function emitLoopPhase(phase) {
+        window.dispatchEvent(new CustomEvent("blackletter:paper-transition", {
+          detail: { phase: phase, towards: "loop" },
+        }));
+      }
+
+      function runLoop() {
+        if (running || paperTransitionActive) return;
+        if (performance.now() < cooldownUntil) return;
+        if (!ensureEffect()) return;
+
+        running = true;
+        pinnedY = window.scrollY;
+        window.addEventListener("scroll", holdScroll, { passive: true });
+        emitLoopPhase("start");
+
+        // Theatre progress: 1 = torn open (clear), 0 = closed sheet.
+        effect.state.progress = 1;
+        canvas.style.opacity = "1";
+
+        const scrollProxy = { y: window.scrollY };
+        const tl = gsap.timeline({
+          onComplete: () => {
+            canvas.style.opacity = "0";
+            window.removeEventListener("scroll", holdScroll);
+            running = false;
+            cooldownUntil = performance.now() + COOLDOWN_MS;
+            emitLoopPhase("end");
+          },
+        });
+
+        tl.to(effect.state, { progress: 0, duration: CLOSE_DUR, ease: "power2.inOut" }, 0);
+        tl.to(scrollProxy, {
+          y: 0,
+          duration: GLIDE_DUR,
+          ease: "power2.inOut",
+          onUpdate: () => {
+            pinnedY = Math.round(scrollProxy.y);
+            window.scrollTo(0, pinnedY);
+          },
+        }, CLOSE_DUR);
+        tl.to(effect.state, { progress: 1, duration: OPEN_DUR, ease: "power2.inOut" }, CLOSE_DUR + GLIDE_DUR);
+      }
+
+      function intercept(event, goingDown) {
+        if (running) {
+          event.preventDefault();
+          return;
+        }
+        if (!goingDown || !atPageEnd()) return;
+        if (!document.body.classList.contains("experience-started")) return;
+        event.preventDefault();
+        runLoop();
+      }
+
+      window.addEventListener("wheel", (event) => {
+        if (event.deltaY === 0) return;
+        intercept(event, event.deltaY > 0);
+      }, { passive: false });
+
+      let lastTouchY = null;
+      window.addEventListener("touchstart", (event) => {
+        lastTouchY = event.touches[0] ? event.touches[0].clientY : null;
+      }, { passive: true });
+      window.addEventListener("touchmove", (event) => {
+        const y = event.touches[0] ? event.touches[0].clientY : null;
+        if (y == null || lastTouchY == null) return;
+        const delta = lastTouchY - y;
+        lastTouchY = y;
+        if (delta !== 0) intercept(event, delta > 0);
+      }, { passive: false });
+
+      window.addEventListener("keydown", (event) => {
+        const target = event.target;
+        const tag = target && target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || (target && target.isContentEditable)) return;
+        const isDown =
+          ["ArrowDown", "PageDown", "End"].includes(event.key) ||
+          (event.key === " " && !event.shiftKey);
+        if (isDown) intercept(event, true);
+      });
+    }
+
+    /* ============================================================
        BOOT — modules run after DOM parse; wire global refresh once
        ============================================================ */
 
@@ -887,6 +1050,7 @@
     initMakersSection();
     initBattleSection();
     initShopSection();
+    initFooterLoop();
 
     function onPageSettled() {
       ScrollTrigger.refresh();

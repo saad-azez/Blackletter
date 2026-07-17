@@ -60,6 +60,25 @@ function emitTransitionPhase(phase: 'start' | 'end', towards: 'next' | 'previous
   );
 }
 
+/**
+ * Page-level paper choreography (e.g. the footer loop curtain in Webflow
+ * custom code) announces itself on the same event; every boundary holds
+ * while any paper transition — ours or foreign — covers the viewport.
+ */
+const foreignBus = { active: false };
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('blackletter:paper-transition', (event) => {
+    const detail = (event as CustomEvent<{ phase?: string }>).detail;
+
+    if (detail?.phase === 'start') {
+      foreignBus.active = true;
+    } else if (detail?.phase === 'end') {
+      foreignBus.active = false;
+    }
+  });
+}
+
 function getComposedParent(element: Element | null): Element | null {
   if (!element) {
     return null;
@@ -306,7 +325,7 @@ export function PaperScrollTransition({
     const runTransition = (towards: 'next' | 'previous') => {
       ensureEffect();
 
-      if (!effect || !section || running || transitionBus.active) {
+      if (!effect || !section || running || transitionBus.active || foreignBus.active) {
         return;
       }
 
@@ -378,8 +397,8 @@ export function PaperScrollTransition({
      * back (which reads as a bounce).
      */
     const captureIntent = (towardsNext: boolean, projectedDelta = 0) => {
-      if (destroyed || running || transitionBus.active) {
-        return running || transitionBus.active;
+      if (destroyed || running || transitionBus.active || foreignBus.active) {
+        return running || transitionBus.active || foreignBus.active;
       }
 
       const rect = measure();
@@ -497,7 +516,7 @@ export function PaperScrollTransition({
     const update = () => {
       scrollRaf = null;
 
-      if (destroyed || running || transitionBus.active) {
+      if (destroyed || running || transitionBus.active || foreignBus.active) {
         return;
       }
 
