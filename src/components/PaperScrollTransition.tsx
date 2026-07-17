@@ -370,8 +370,14 @@ export function PaperScrollTransition({
      * Capture a scroll intent (wheel/touch/key) at the boundary. Returns true
      * when the event was consumed. The transition starts with the viewport
      * pixel-aligned inside this section, so the neighbour is never shown.
+     *
+     * `projectedDelta` is how far the intercepted event would scroll: the
+     * capture window stretches by that amount, so an aggressive fling that
+     * would sail across the boundary is caught and converted into "land
+     * exactly on the boundary" instead of overshooting and being clamped
+     * back (which reads as a bounce).
      */
-    const captureIntent = (towardsNext: boolean) => {
+    const captureIntent = (towardsNext: boolean, projectedDelta = 0) => {
       if (destroyed || running || transitionBus.active) {
         return running || transitionBus.active;
       }
@@ -384,13 +390,15 @@ export function PaperScrollTransition({
       }
 
       const viewportHeight = window.innerHeight;
+      const reach = Math.max(0, projectedDelta);
 
       if (towardsNext) {
-        // At (or approaching) this section's end while fully inside it.
+        // At this section's end while fully inside it, or close enough that
+        // the incoming scroll step would cross it.
         const atEnd =
           rect.top <= 2 &&
           rect.bottom >= viewportHeight - 2 &&
-          rect.bottom <= viewportHeight + CAPTURE_WINDOW_PX;
+          rect.bottom <= viewportHeight + CAPTURE_WINDOW_PX + reach;
 
         if (!atEnd) {
           return false;
@@ -409,9 +417,10 @@ export function PaperScrollTransition({
         return true;
       }
 
-      // Heading back up: the viewport sits at the top of the following
-      // section, i.e. this section's end is at (or just above) the viewport top.
-      const atFollowingTop = rect.bottom >= -2 && rect.bottom <= CAPTURE_WINDOW_PX;
+      // Heading back up: the viewport sits at (or, with a large step, would
+      // cross) the top of the following section.
+      const atFollowingTop =
+        rect.bottom >= -(2 + reach) && rect.bottom <= CAPTURE_WINDOW_PX;
 
       if (!atFollowingTop) {
         return false;
@@ -421,7 +430,7 @@ export function PaperScrollTransition({
         return true;
       }
 
-      if (rect.bottom > 2) {
+      if (Math.abs(rect.bottom) > 2) {
         window.scrollTo(0, window.scrollY + rect.bottom);
       }
 
@@ -435,7 +444,12 @@ export function PaperScrollTransition({
         return;
       }
 
-      if (captureIntent(event.deltaY > 0)) {
+      // Normalise the wheel step to pixels (line/page delta modes).
+      const unit =
+        event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? window.innerHeight : 1;
+      const step = Math.abs(event.deltaY) * unit;
+
+      if (captureIntent(event.deltaY > 0, step)) {
         event.preventDefault();
       }
     };
@@ -455,7 +469,7 @@ export function PaperScrollTransition({
 
       lastTouchY = currentY;
 
-      if (delta !== 0 && captureIntent(delta > 0)) {
+      if (delta !== 0 && captureIntent(delta > 0, Math.abs(delta))) {
         event.preventDefault();
       }
     };
@@ -470,7 +484,10 @@ export function PaperScrollTransition({
       const isDown = downKeys.includes(event.key) || (event.key === ' ' && !event.shiftKey);
       const isUp = upKeys.includes(event.key) || (event.key === ' ' && event.shiftKey);
 
-      if ((isDown || isUp) && captureIntent(isDown)) {
+      // Arrows nudge ~a hundred pixels; paging keys jump about a viewport.
+      const step = event.key === 'ArrowDown' || event.key === 'ArrowUp' ? 120 : window.innerHeight;
+
+      if ((isDown || isUp) && captureIntent(isDown, step)) {
         event.preventDefault();
       }
     };
