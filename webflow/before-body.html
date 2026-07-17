@@ -951,11 +951,10 @@
         if (window.scrollY !== pinnedY) window.scrollTo(0, pinnedY);
       };
 
-      function atPageEnd() {
+      function distanceToEnd() {
         return (
-          footer.getBoundingClientRect().height > 2 &&
-          window.innerHeight + window.scrollY >=
-            document.documentElement.scrollHeight - 2
+          document.documentElement.scrollHeight -
+          (window.innerHeight + window.scrollY)
         );
       }
 
@@ -965,11 +964,34 @@
         }));
       }
 
-      function runLoop() {
-        if (running || paperTransitionActive) return;
-        if (performance.now() < cooldownUntil) return;
-        if (!ensureEffect()) return;
+      // Diagnostic: a directional wipe playing at the page end means a
+      // Paper Scroll Transition component is still mounted in the footer.
+      window.addEventListener("blackletter:paper-transition", (event) => {
+        const detail = event.detail || {};
+        if (detail.phase === "start" && detail.towards !== "loop" &&
+            distanceToEnd() < window.innerHeight * 1.5) {
+          console.warn("[FooterLoop] a Paper Scroll Transition wipe started near the page end (towards: " +
+            detail.towards + "). REMOVE the Paper Scroll Transition component from inside .footer-section — " +
+            "the footer loop replaces it there.");
+        }
+      });
 
+      function runLoop() {
+        if (running) return;
+        if (paperTransitionActive) {
+          console.log("[FooterLoop] blocked — another paper transition is active.");
+          return;
+        }
+        if (performance.now() < cooldownUntil) {
+          console.log("[FooterLoop] blocked — cooldown.");
+          return;
+        }
+        if (!ensureEffect()) {
+          console.warn("[FooterLoop] could not create the curtain effect (WebGL).");
+          return;
+        }
+
+        console.log("[FooterLoop] LOOP START — closing the theatre curtain at scrollY", window.scrollY);
         running = true;
         pinnedY = window.scrollY;
         window.addEventListener("scroll", holdScroll, { passive: true });
@@ -987,10 +1009,14 @@
             running = false;
             cooldownUntil = performance.now() + COOLDOWN_MS;
             emitLoopPhase("end");
+            console.log("[FooterLoop] loop complete — curtain cleared, scroll unlocked at the top.");
           },
         });
 
         tl.to(effect.state, { progress: 0, duration: CLOSE_DUR, ease: "power2.inOut" }, 0);
+        tl.call(() => {
+          console.log("[FooterLoop] fully covered — gliding home to the top.");
+        }, null, CLOSE_DUR);
         tl.to(scrollProxy, {
           y: 0,
           duration: GLIDE_DUR,
@@ -1000,36 +1026,56 @@
             window.scrollTo(0, pinnedY);
           },
         }, CLOSE_DUR);
+        tl.call(() => {
+          console.log("[FooterLoop] at the top — tearing the curtain open.");
+        }, null, CLOSE_DUR + GLIDE_DUR);
         tl.to(effect.state, { progress: 1, duration: OPEN_DUR, ease: "power2.inOut" }, CLOSE_DUR + GLIDE_DUR);
       }
 
-      function intercept(event, goingDown) {
+      /* Capture-phase interception: runs BEFORE the Paper Scroll Transition
+         components' own listeners, and swallows the event entirely when the
+         loop takes over — so the directional wipe can never win the race at
+         the page end. `stepPx` is how far the event would scroll: any step
+         that would reach the end triggers the loop (predictive, like the
+         section boundaries), so aggressive flings are caught too. */
+      function intercept(event, goingDown, stepPx) {
         if (running) {
           event.preventDefault();
+          event.stopImmediatePropagation();
           return;
         }
-        if (!goingDown || !atPageEnd()) return;
+        if (!goingDown) return;
         if (!document.body.classList.contains("experience-started")) return;
+
+        const dist = distanceToEnd();
+        if (dist > Math.max(2, stepPx)) return; // this step can't reach the end
+
+        console.log("[FooterLoop] captured a downward step of ~" + Math.round(stepPx) +
+          "px at " + Math.round(dist) + "px from the page end — taking over (curtain, not wipe).");
         event.preventDefault();
+        event.stopImmediatePropagation();
+
+        if (dist > 0) window.scrollTo(0, window.scrollY + dist);
         runLoop();
       }
 
       window.addEventListener("wheel", (event) => {
         if (event.deltaY === 0) return;
-        intercept(event, event.deltaY > 0);
-      }, { passive: false });
+        const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? window.innerHeight : 1;
+        intercept(event, event.deltaY > 0, Math.abs(event.deltaY) * unit);
+      }, { passive: false, capture: true });
 
       let lastTouchY = null;
       window.addEventListener("touchstart", (event) => {
         lastTouchY = event.touches[0] ? event.touches[0].clientY : null;
-      }, { passive: true });
+      }, { passive: true, capture: true });
       window.addEventListener("touchmove", (event) => {
         const y = event.touches[0] ? event.touches[0].clientY : null;
         if (y == null || lastTouchY == null) return;
         const delta = lastTouchY - y;
         lastTouchY = y;
-        if (delta !== 0) intercept(event, delta > 0);
-      }, { passive: false });
+        if (delta !== 0) intercept(event, delta > 0, Math.abs(delta));
+      }, { passive: false, capture: true });
 
       window.addEventListener("keydown", (event) => {
         const target = event.target;
@@ -1038,8 +1084,12 @@
         const isDown =
           ["ArrowDown", "PageDown", "End"].includes(event.key) ||
           (event.key === " " && !event.shiftKey);
-        if (isDown) intercept(event, true);
-      });
+        const step = event.key === "ArrowDown" ? 120 : window.innerHeight;
+        if (isDown) intercept(event, true, step);
+      }, { capture: true });
+
+      console.log("[FooterLoop] armed — footer found, listeners in capture phase,",
+        "page height " + document.documentElement.scrollHeight + "px.");
     }
 
     /* ============================================================
