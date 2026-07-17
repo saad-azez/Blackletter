@@ -784,20 +784,13 @@ function main() {
 
     function runLoop() {
       if (running) return;
-      if (paperTransitionActive) {
-        console.log("[FooterLoop] blocked — another paper transition is active.");
-        return;
-      }
-      if (performance.now() < cooldownUntil) {
-        console.log("[FooterLoop] blocked — cooldown.");
-        return;
-      }
+      if (paperTransitionActive) return;
+      if (performance.now() < cooldownUntil) return;
       if (!ensureEffect()) {
         console.warn("[FooterLoop] could not create the curtain effect (WebGL).");
         return;
       }
 
-      console.log("[FooterLoop] LOOP START — closing the theatre curtain at scrollY", window.scrollY);
       running = true;
       pinnedY = window.scrollY;
       window.addEventListener("scroll", holdScroll, { passive: true });
@@ -815,14 +808,10 @@ function main() {
           running = false;
           cooldownUntil = performance.now() + COOLDOWN_MS;
           emitLoopPhase("end");
-          console.log("[FooterLoop] loop complete — curtain cleared, scroll unlocked at the top.");
         },
       });
 
       tl.to(effect.state, { progress: 0, duration: CLOSE_DUR, ease: "power2.inOut" }, 0);
-      tl.call(() => {
-        console.log("[FooterLoop] fully covered — gliding home to the top.");
-      }, null, CLOSE_DUR);
       tl.to(scrollProxy, {
         y: 0,
         duration: GLIDE_DUR,
@@ -832,9 +821,6 @@ function main() {
           window.scrollTo(0, pinnedY);
         },
       }, CLOSE_DUR);
-      tl.call(() => {
-        console.log("[FooterLoop] at the top — tearing the curtain open.");
-      }, null, CLOSE_DUR + GLIDE_DUR);
       tl.to(effect.state, { progress: 1, duration: OPEN_DUR, ease: "power2.inOut" }, CLOSE_DUR + GLIDE_DUR);
     }
 
@@ -856,8 +842,6 @@ function main() {
       const dist = distanceToEnd();
       if (dist > Math.max(2, stepPx)) return; // this step can't reach the end
 
-      console.log("[FooterLoop] captured a downward step of ~" + Math.round(stepPx) +
-        "px at " + Math.round(dist) + "px from the page end — taking over (curtain, not wipe).");
       event.preventDefault();
       event.stopImmediatePropagation();
 
@@ -894,8 +878,6 @@ function main() {
       if (isDown) intercept(event, true, step);
     }, { capture: true });
 
-    console.log("[FooterLoop] armed — footer found, listeners in capture phase,",
-      "page height " + document.documentElement.scrollHeight + "px.");
   }
 
   /* ============================================================

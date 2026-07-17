@@ -585,6 +585,7 @@ export function CastleScene({
     normalizeFloorLightSettings({ ...castleFloorLightDefaults }),
   );
   const [, setFloorScreenRect] = useState<FloorScreenRect | null>(null);
+  const [frameloop, setFrameloop] = useState<'always' | 'never'>('always');
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= 767 : false,
   );
@@ -753,6 +754,32 @@ export function CastleScene({
     ],
     [],
   );
+
+  // Sleep the render loop entirely while the scene is far off-screen.
+  useEffect(() => {
+    const element = sectionRef.current;
+
+    if (!element || typeof IntersectionObserver === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[entries.length - 1];
+
+        if (entry) {
+          setFrameloop(entry.isIntersecting ? 'always' : 'never');
+        }
+      },
+      { rootMargin: '200px' },
+    );
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     if (!showGui || !guiRootRef.current) {
@@ -1484,6 +1511,7 @@ export function CastleScene({
       >
         <Canvas
           dpr={[1, 1.25]}
+          frameloop={frameloop}
           gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', stencil: false }}
           onCreated={({ gl }) => {
             gl.setClearColor(0x000000, 0);
