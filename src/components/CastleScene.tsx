@@ -53,18 +53,11 @@ const FILL_LIGHT_INTENSITY = 0.55;
 useGLTF.preload(defaultVortexSceneUrl, dracoDecoderPath);
 
 export interface CastleSceneProps {
-  castleModelUrl?: string;
-  floorModelUrl?: string;
-  modelScale?: number;
-  cameraX?: number;
-  cameraY?: number;
-  cameraZ?: number;
   animationEnabled?: boolean;
+  castleModelUrl?: string;
+  /** @deprecated use castleModelUrl */
   modelUrl?: string;
-  rocksImageUrl?: string;
   showGui?: boolean;
-  skyTextureUrl?: string;
-  towerModelUrl?: string;
 }
 
 function toText(value: unknown) {

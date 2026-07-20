@@ -18,6 +18,9 @@ export interface CameraRigDomLayer {
   panY: number;
   /** Oversize factor so translation never reveals the layer's edges. */
   scale?: number;
+  /** Extra scale at rest that eases away as the section scrolls out —
+      the layer reads as zooming out while the user scrolls. */
+  zoom?: number;
 }
 
 export interface CameraParallaxRigProps {
@@ -130,7 +133,10 @@ export function CameraParallaxRig({
 
       const x = pointer.x * layer.panX;
       const y = -pointer.y * layer.panY - scroll * layer.lift;
-      const transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${layer.scale ?? 1})`;
+      // Quadratic release: most of the zoom-out lands early in the scroll.
+      const settle = 1 - Math.min(Math.abs(scroll), 1);
+      const scale = (layer.scale ?? 1) + (layer.zoom ?? 0) * settle * settle;
+      const transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${scale.toFixed(4)})`;
 
       if (element.style.transform !== transform) {
         element.style.transform = transform;

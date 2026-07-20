@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 
 
 const CastleScene = lazy(() => import('./components/CastleScene'));
@@ -162,12 +162,19 @@ function SceneChrome({ debug, scene }: { debug: boolean; scene: SceneRoute }) {
 }
 
 function ScenePage({ debug, scene }: { debug: boolean; scene: SceneRoute }) {
+  // On the live site the hero's "Start the Experience" flow adds this class,
+  // which the scenes use to reveal their backgrounds. The standalone demo
+  // pages have no hero, so simulate a started experience.
+  useEffect(() => {
+    document.body.classList.add('experience-started');
+  }, []);
+
   return (
     <div className="scene-page" style={shellStyles.layout}>
       <SceneChrome debug={debug} scene={scene} />
       <Suspense fallback={null}>
         {scene === 'castle' ? (
-          <CastleScene animationEnabled modelScale={1} showGui={debug} />
+          <CastleScene animationEnabled showGui={debug} />
         ) : scene === 'character' ? (
           <CharacterScene animationEnabled modelScale={1} showGui={debug} />
         ) : (

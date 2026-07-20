@@ -6,31 +6,17 @@ import { CastleScene } from './CastleScene';
 
 const castleSceneWebflow = declareComponent(CastleScene, {
   name: 'Castle Scene',
-  description: 'A Castle-specific scene component with a fixed, non-interactive camera.',
+  description:
+    'The castle vortex scene: a single authored GLB (castle, towers, sky, rocks, camera and light) with scroll and pointer-driven motion baked in.',
   group: 'Media',
   options: {
     ssr: false,
   },
   props: {
     castleModelUrl: props.Text({
-      name: 'Castle GLB URL',
+      name: 'Scene GLB URL',
       defaultValue: '',
-      tooltip: 'Paste the public URL for the main castle .glb file.',
-    }),
-    towerModelUrl: props.Text({
-      name: 'Tower GLB URL',
-      defaultValue: '',
-      tooltip: 'Paste the public URL for the tower .glb file used across the scene.',
-    }),
-    skyTextureUrl: props.Text({
-      name: 'Sky Texture URL',
-      defaultValue: '',
-      tooltip: 'Paste the public URL for the sky texture image.',
-    }),
-    rocksImageUrl: props.Text({
-      name: 'Rocks Image URL',
-      defaultValue: '',
-      tooltip: 'Paste the public URL for the rocks foreground image.',
+      tooltip: 'Paste the public URL for the vortex scene .glb file. Leave blank to use the bundled default.',
     }),
     animationEnabled: props.Boolean({
       name: 'Pointer Drift',
