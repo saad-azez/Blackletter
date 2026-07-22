@@ -36,9 +36,6 @@ const SKY_COVER_BLEED = 1.03;
 /** The main castle is scaled up about its base centre. */
 const CASTLE_SCALE = 1.5;
 
-/** Slight overshoot when fitting the rocks across the frame width. */
-const ROCKS_BLEED = 1.04;
-
 /**
  * The GLB's only light is a single directional sun (Blender's glTF export
  * doesn't carry the viewport's implicit world/ambient light), so anything
@@ -206,7 +203,6 @@ interface VortexRig {
   pitch: THREE.Group;
   rocks: THREE.Object3D | null;
   sky: THREE.Object3D | null;
-  skyBaseScale: THREE.Vector3 | null;
   towersGroup: THREE.Object3D | null;
 }
 
@@ -259,11 +255,33 @@ function applyCoverFraming(camera: THREE.PerspectiveCamera, aspect: number) {
 }
 
 /**
- * Project an object's world-space bounding box corners into camera space
- * (x = right, y = up, z = -depth). Shared by the sky and rocks fits so both
- * measure coverage the same way.
+ * Project one world-space point through the camera into NDC (x/y in
+ * roughly [-1, 1] when on-screen). Returns null for points at or behind the
+ * camera, where a raw projection is meaningless (it would mirror to the
+ * wrong side instead of correctly reporting "not visible this way").
  */
-function cameraSpaceBounds(camera: THREE.PerspectiveCamera, object: THREE.Object3D) {
+function projectToNdc(camera: THREE.PerspectiveCamera, toCameraSpace: THREE.Matrix4, point: THREE.Vector3) {
+  const cameraSpacePoint = point.clone().applyMatrix4(toCameraSpace);
+
+  if (cameraSpacePoint.z >= -1e-4) {
+    return null;
+  }
+
+  const ndc = point.clone().project(camera);
+
+  return { x: ndc.x, y: ndc.y };
+}
+
+/**
+ * Measure an object's actual on-screen NDC bounding box by projecting all
+ * 8 corners of its world-space AABB through the camera's real projection.
+ * Unlike a fixed-depth approximation, this is correct for a plane tilted at
+ * a steep angle to the camera, where the near and far edges can sit at
+ * wildly different true depths (this scene's sky/rocks backdrops are
+ * tilted ~40°, and part of their bounding box can even fall behind the
+ * camera — a single "average depth" is meaningless there).
+ */
+function measureNdcCoverage(camera: THREE.PerspectiveCamera, object: THREE.Object3D) {
   const box = new THREE.Box3().setFromObject(object);
 
   if (box.isEmpty()) {
@@ -271,26 +289,119 @@ function cameraSpaceBounds(camera: THREE.PerspectiveCamera, object: THREE.Object
   }
 
   const toCameraSpace = new THREE.Matrix4().copy(camera.matrixWorld).invert();
-  const bounds = new THREE.Box3();
+  const corners = [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+  ];
 
-  for (const x of [box.min.x, box.max.x]) {
-    for (const y of [box.min.y, box.max.y]) {
-      for (const z of [box.min.z, box.max.z]) {
-        bounds.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(toCameraSpace));
-      }
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let visible = 0;
+
+  corners.forEach((corner) => {
+    const ndc = projectToNdc(camera, toCameraSpace, corner);
+
+    if (!ndc) {
+      return;
     }
+
+    visible += 1;
+    minX = Math.min(minX, ndc.x);
+    maxX = Math.max(maxX, ndc.x);
+    minY = Math.min(minY, ndc.y);
+    maxY = Math.max(maxY, ndc.y);
+  });
+
+  return visible > 0 ? { minX, maxX, minY, maxY } : null;
+}
+
+/**
+ * Scale `object` uniformly about its own AABB centre rather than its local
+ * origin. A plain `object.scale.multiplyScalar` scales about whatever the
+ * mesh's authored pivot happens to be; holding the AABB centre fixed instead
+ * keeps growth symmetric regardless of where that pivot sits.
+ */
+function scaleAboutOwnCenter(object: THREE.Object3D, factor: number) {
+  const box = new THREE.Box3().setFromObject(object);
+
+  if (box.isEmpty()) {
+    object.scale.multiplyScalar(factor);
+    object.updateMatrixWorld(true);
+    return;
   }
 
-  return bounds;
+  const centerWorld = box.getCenter(new THREE.Vector3());
+  const centerParent = object.parent ? object.parent.worldToLocal(centerWorld) : centerWorld;
+
+  // Keeping centerParent fixed while scale multiplies by `factor` requires
+  // position' = centerParent * (1 - factor) + position * factor (derived
+  // from how a local-space point maps through position + scale*point).
+  object.position.copy(
+    centerParent.multiplyScalar(1 - factor).add(object.position.clone().multiplyScalar(factor)),
+  );
+  object.scale.multiplyScalar(factor);
+  object.updateMatrixWorld(true);
+}
+
+/**
+ * Grow `object`'s scale (about its own AABB centre, via scaleAboutOwnCenter)
+ * until its projected NDC footprint covers at least [-bleed, bleed] in both
+ * axes. Iterative rather than solved directly, since perspective projection
+ * makes "how much scale closes this NDC gap" depend on where the object
+ * currently sits — but it converges in a handful of steps and is correct
+ * regardless of tilt, whereas a single-shot depth-based estimate is not (see
+ * above).
+ */
+function growToFullNdcCoverage(camera: THREE.PerspectiveCamera, object: THREE.Object3D, bleed: number) {
+  const MAX_ITERATIONS = 40;
+
+  for (let i = 0; i < MAX_ITERATIONS; i += 1) {
+    const coverage = measureNdcCoverage(camera, object);
+
+    if (coverage) {
+      const xOk = coverage.minX <= -bleed && coverage.maxX >= bleed;
+      const yOk = coverage.minY <= -bleed && coverage.maxY >= bleed;
+
+      if (xOk && yOk) {
+        return;
+      }
+    }
+
+    if (!coverage) {
+      // Nothing currently projects in front of the camera — grow blindly
+      // until some part of the plane comes into view to measure against.
+      scaleAboutOwnCenter(object, 2);
+      continue;
+    }
+
+    const spanX = coverage.maxX - coverage.minX;
+    const spanY = coverage.maxY - coverage.minY;
+    const neededSpan = 2 * bleed;
+    const growX = spanX > 1e-6 ? neededSpan / spanX : 2;
+    const growY = spanY > 1e-6 ? neededSpan / spanY : 2;
+    const grow = Math.max(growX, growY, 1.05) * 1.05;
+
+    scaleAboutOwnCenter(object, grow);
+  }
+
+  console.warn('[CastleScene] growToFullNdcCoverage did not converge — the object may still leave a gap.');
 }
 
 /**
  * Reset an object to its pristine authored local position/scale, capturing
- * that baseline the first time it's called. pushSkyBack/fitRocksToFrame
- * both re-run on every resize (a fit sized for one aspect ratio can crop on
- * a narrower one), and without this reset each re-run would compound on top
- * of the PREVIOUS fit's already-adjusted position/scale instead of
- * recomputing fresh from the design.
+ * that baseline the first time it's called. pushSkyBack re-runs on every
+ * resize (a fit sized for one aspect ratio can leave a gap on a narrower
+ * one), and without this reset each re-run would compound on top of the
+ * PREVIOUS fit's already-adjusted position/scale instead of recomputing
+ * fresh from the design.
  */
 function resetToAuthoredLocal(object: THREE.Object3D) {
   if (!object.userData.__authoredLocal) {
@@ -308,112 +419,105 @@ function resetToAuthoredLocal(object: THREE.Object3D) {
 }
 
 /**
- * Push the backdrop away from the camera along its view ray, then re-scale
- * it to the MINIMUM size that still covers the frame at that new distance.
- * A flat backdrop's apparent size depends only on scale-to-distance ratio,
- * not distance alone — oversizing it while pushing it back is invisible
- * (or reads as zooming in), so this always lands on the least "zoomed"
- * size that leaves no gap, which is the most convincingly distant result.
+ * Push the backdrop away from the camera along its view ray, then grow it
+ * (via growToFullNdcCoverage) to the minimum size that still covers the
+ * entire frame at that new distance. A flat backdrop's apparent size
+ * depends only on scale-to-distance ratio, not distance alone — oversizing
+ * it while pushing it back is invisible (or reads as zooming in), so this
+ * always lands on the least "zoomed" size that leaves no gap, which is the
+ * most convincingly distant result.
  *
- * Uses the camera's REAL, current fov/aspect (already cover-framed for the
- * live viewport by applyCoverFraming, which must run first) rather than the
- * fixed authored constants, so the fit is correct on every screen size —
- * re-run this on every resize, since a fit sized for one aspect can leave a
- * gap (or, for rocks, crop) on another.
+ * Re-run this on every resize (via refitFrameDependentLayers), since a fit
+ * sized for one aspect ratio can leave a gap on another.
  */
 function pushSkyBack(camera: THREE.PerspectiveCamera, sky: THREE.Object3D) {
   resetToAuthoredLocal(sky);
 
-  const bounds = cameraSpaceBounds(camera, sky);
-
-  if (!bounds) {
-    return;
-  }
-
-  const vfov = THREE.MathUtils.degToRad(camera.fov);
-  const currentDepth = -(bounds.min.z + bounds.max.z) / 2;
-
-  if (currentDepth <= 0) {
-    return;
-  }
-
-  const targetDepth = currentDepth * SKY_PUSH;
-
   const cameraPosition = camera.getWorldPosition(new THREE.Vector3());
   const skyPosition = sky.getWorldPosition(new THREE.Vector3());
-  const direction = skyPosition.sub(cameraPosition).normalize();
-  const targetWorld = cameraPosition.clone().add(direction.multiplyScalar(targetDepth));
+  const currentDistance = skyPosition.distanceTo(cameraPosition);
+
+  if (currentDistance <= 0) {
+    return;
+  }
+
+  const direction = skyPosition.clone().sub(cameraPosition).normalize();
+  const targetWorld = cameraPosition.clone().add(direction.multiplyScalar(currentDistance * SKY_PUSH));
 
   sky.parent?.worldToLocal(targetWorld);
   sky.position.copy(targetWorld);
   sky.updateMatrixWorld(true);
 
-  const halfHeight = Math.tan(vfov / 2) * targetDepth;
-  const halfWidth = halfHeight * camera.aspect;
-  const width = bounds.max.x - bounds.min.x;
-  const height = bounds.max.y - bounds.min.y;
-
-  if (width > 0 && height > 0) {
-    const scaleForWidth = (2 * halfWidth) / width;
-    const scaleForHeight = (2 * halfHeight) / height;
-
-    sky.scale.multiplyScalar(Math.max(scaleForWidth, scaleForHeight) * SKY_COVER_BLEED);
-  }
+  growToFullNdcCoverage(camera, sky, SKY_COVER_BLEED);
 }
 
 /**
- * Fit the rocks so the COMPLETE image is on screen: scaled to span the
- * frame's actual current width and bottom-aligned with the frame's lower
- * edge. Sizing against the camera's real, live aspect (see pushSkyBack)
- * instead of a fixed authored one is what keeps the whole image visible on
- * narrower screens — a fit sized for a wider aspect overshoots a narrower
- * frustum's true width and crops off the sides.
+ * The rocks are pinned to the CAMERA rather than fit within the scene: a
+ * flat, camera-facing billboard at a fixed distance in front of the lens,
+ * closed-form sized/positioned every resize instead of iteratively fit.
+ *
+ * The scene-space approach (growing/shifting the authored, ~40°-tilted
+ * plane to hit NDC targets) had two problems that this sidesteps entirely:
+ * it could only ever rest the plane's bottom edge at the frame's bottom for
+ * ONE specific camera distance/tilt combination, and closing that fit's
+ * remaining NDC gap via a world-space shift measurably changed the plane's
+ * OWN depth (because "camera up" has a world-Z component once the camera is
+ * pitched), which could push it in front of castle geometry it should sit
+ * behind. A camera-attached billboard has neither issue: its position is
+ * always exactly "this far in front of the lens," so it's always flush
+ * with the bottom of frame regardless of scroll/pitch/FOV changes, and
+ * staying reliably closer to the camera than any castle geometry keeps
+ * normal depth-testing correct (never wrongly hidden, never bleeding over
+ * things it shouldn't).
  */
-function fitRocksToFrame(camera: THREE.PerspectiveCamera, rocks: THREE.Object3D) {
-  resetToAuthoredLocal(rocks);
+const ROCKS_CAMERA_DISTANCE = 2;
+const ROCKS_BILLBOARD_BLEED = 1.04;
+
+function attachRocksToCamera(camera: THREE.PerspectiveCamera, rocks: THREE.Object3D) {
+  if (rocks.parent === camera) {
+    return;
+  }
+
+  camera.attach(rocks);
+  rocks.rotation.set(0, 0, 0);
+}
+
+function fitRocksAsCameraBillboard(camera: THREE.PerspectiveCamera, rocks: THREE.Object3D) {
+  attachRocksToCamera(camera, rocks);
+
+  const mesh = rocks as THREE.Mesh;
+
+  if (!mesh.isMesh) {
+    return;
+  }
+
+  mesh.geometry.computeBoundingBox();
+  const box = mesh.geometry.boundingBox;
+
+  if (!box) {
+    return;
+  }
+
+  const halfExtentX = (box.max.x - box.min.x) / 2;
+  const halfExtentY = (box.max.y - box.min.y) / 2;
+
+  if (halfExtentX <= 0 || halfExtentY <= 0) {
+    return;
+  }
 
   const vfov = THREE.MathUtils.degToRad(camera.fov);
+  const halfHeightAtDistance = Math.tan(vfov / 2) * ROCKS_CAMERA_DISTANCE;
+  const halfWidthAtDistance = halfHeightAtDistance * camera.aspect;
 
-  let bounds = cameraSpaceBounds(camera, rocks);
+  // Uniform scale (preserves the silhouette's own aspect ratio) sized to
+  // just cover the frame's width at this fixed distance.
+  const scale = (ROCKS_BILLBOARD_BLEED * halfWidthAtDistance) / halfExtentX;
 
-  if (!bounds) {
-    return;
-  }
-
-  const depth = -(bounds.min.z + bounds.max.z) / 2;
-
-  if (depth <= 0) {
-    return;
-  }
-
-  const halfHeight = Math.tan(vfov / 2) * depth;
-  const halfWidth = halfHeight * camera.aspect;
-  const width = bounds.max.x - bounds.min.x;
-
-  if (width > 0) {
-    rocks.scale.multiplyScalar((2 * halfWidth * ROCKS_BLEED) / width);
-    rocks.updateMatrixWorld(true);
-    bounds = cameraSpaceBounds(camera, rocks);
-
-    if (!bounds) {
-      return;
-    }
-  }
-
-  // Centre horizontally, rest the image's bottom edge on the frame's bottom.
-  // Computed as a camera-local delta, then carried through world space —
-  // rocks.position is parent-relative, so a naive local add would be wrong
-  // if the rocks (or sky) sit under a rotated/scaled environment group.
-  const shiftCameraSpace = new THREE.Vector3(
-    -(bounds.min.x + bounds.max.x) / 2,
-    -halfHeight - bounds.min.y,
-    0,
-  );
-  const shiftWorld = shiftCameraSpace.applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
-  const targetWorld = rocks.getWorldPosition(new THREE.Vector3()).add(shiftWorld);
-
-  rocks.parent?.worldToLocal(targetWorld);
-  rocks.position.copy(targetWorld);
+  rocks.scale.setScalar(scale);
+  // Position so the geometry's bottom edge (local y = -halfExtentY) lands
+  // slightly past the frustum's true bottom, for a safety overlap rather
+  // than a hairline gap.
+  rocks.position.set(0, scale * halfExtentY - ROCKS_BILLBOARD_BLEED * halfHeightAtDistance, -ROCKS_CAMERA_DISTANCE);
   rocks.updateMatrixWorld(true);
 }
 
@@ -435,7 +539,7 @@ function refitFrameDependentLayers(rig: VortexRig, camera: THREE.PerspectiveCame
   }
 
   if (rig.rocks) {
-    fitRocksToFrame(camera, rig.rocks);
+    fitRocksAsCameraBillboard(camera, rig.rocks);
     captureBaseTransform(rig.rocks);
   }
 }
@@ -625,7 +729,6 @@ function buildVortexRig(gltf: LoadedVortexScene, sceneUrl: string): VortexRig {
     pitch,
     rocks,
     sky,
-    skyBaseScale: getBaseTransform(sky)?.scale ?? null,
     towersGroup: towers,
   };
 }
@@ -637,7 +740,12 @@ function animateVortexRig(
   pointer: THREE.Vector2,
   skyZoomOffset: number,
 ) {
-  const { pitch, sky, skyBaseScale } = rig;
+  const { pitch, sky } = rig;
+  // Read live rather than caching at rig-construction time: the sky's base
+  // transform isn't captured until refitFrameDependentLayers runs (after the
+  // initial camera fit), so a value captured earlier would always be stale
+  // null and permanently disable this animation.
+  const skyBaseScale = sky ? getBaseTransform(sky)?.scale ?? null : null;
 
   // Clouds: rest zoomed-in, zooming out as the user scrolls — the release
   // is quadratic so most of it lands early in the scroll. skyZoomOffset is
