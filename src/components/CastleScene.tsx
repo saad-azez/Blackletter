@@ -24,6 +24,11 @@ const SCROLL_PITCH_RAD = -0.22;
 const POINTER_YAW_RAD = 0.1;
 const POINTER_PITCH_RAD = 0.06;
 
+/** How quickly the smoothed scroll value chases the raw scroll position —
+    higher tracks the actual scroll more tightly (less lag), lower trails
+    behind it for longer (a more syrupy, delayed feel). */
+const SCROLL_DAMP_RATE = 8;
+
 /** The backdrop is pushed this much farther from the camera along its view
     ray, then re-scaled to the minimum size that still covers the frame at
     that new distance — the most "pulled back" it can look without ever
@@ -35,6 +40,19 @@ const SKY_COVER_BLEED = 1.03;
 
 /** The main castle is scaled up about its base centre. */
 const CASTLE_SCALE = 1.5;
+
+/**
+ * Designer-tuned adjustment on top of the pivot-scaled castle, dialed in via
+ * the debug positioning panel and baked in as the permanent framing. Applied
+ * in the castle's own pitch-local space (same space the debug panel's castle
+ * offsets use), after the castle parts are pivot-scaled — the whole
+ * composition-fitting system (applyCoverFraming) keeps this framing
+ * consistent across every aspect ratio, the same way CASTLE_SCALE already
+ * does, so no extra per-viewport handling is needed here.
+ */
+const CASTLE_POSITION_OFFSET = new THREE.Vector3(1.3, 0.08, 0);
+const CASTLE_ROTATION_OFFSET_DEG = { x: 0, y: -30, z: 2 };
+const CASTLE_SCALE_MULTIPLIER = 0.9;
 
 /**
  * The GLB's only light is a single directional sun (Blender's glTF export
@@ -582,7 +600,17 @@ function scaleCastleUp(pitch: THREE.Group, castleParts: THREE.Object3D[]): THREE
     castleRig.attach(part);
   });
 
-  castleRig.scale.setScalar(CASTLE_SCALE);
+  // attach() fixes each part's world position at THIS moment, so the pivot
+  // scale/offset/rotation below must come after — changing castleRig's own
+  // transform now moves the whole attached group rigidly, whereas changing
+  // it beforehand would just have attach() cancel the offset back out.
+  castleRig.scale.setScalar(CASTLE_SCALE * CASTLE_SCALE_MULTIPLIER);
+  castleRig.position.add(CASTLE_POSITION_OFFSET);
+  castleRig.rotation.set(
+    THREE.MathUtils.degToRad(CASTLE_ROTATION_OFFSET_DEG.x),
+    THREE.MathUtils.degToRad(CASTLE_ROTATION_OFFSET_DEG.y),
+    THREE.MathUtils.degToRad(CASTLE_ROTATION_OFFSET_DEG.z),
+  );
 
   return castleRig;
 }
@@ -936,7 +964,7 @@ function VortexScene({
     scrollSmoothRef.current = THREE.MathUtils.damp(
       scrollSmoothRef.current,
       scrollTarget.current,
-      2.2,
+      SCROLL_DAMP_RATE,
       dt,
     );
 
