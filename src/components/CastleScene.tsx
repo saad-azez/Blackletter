@@ -285,22 +285,52 @@ function cameraSpaceBounds(camera: THREE.PerspectiveCamera, object: THREE.Object
 }
 
 /**
+ * Reset an object to its pristine authored local position/scale, capturing
+ * that baseline the first time it's called. pushSkyBack/fitRocksToFrame
+ * both re-run on every resize (a fit sized for one aspect ratio can crop on
+ * a narrower one), and without this reset each re-run would compound on top
+ * of the PREVIOUS fit's already-adjusted position/scale instead of
+ * recomputing fresh from the design.
+ */
+function resetToAuthoredLocal(object: THREE.Object3D) {
+  if (!object.userData.__authoredLocal) {
+    object.userData.__authoredLocal = {
+      position: object.position.clone(),
+      scale: object.scale.clone(),
+    };
+  }
+
+  const authored = object.userData.__authoredLocal as { position: THREE.Vector3; scale: THREE.Vector3 };
+
+  object.position.copy(authored.position);
+  object.scale.copy(authored.scale);
+  object.updateMatrixWorld(true);
+}
+
+/**
  * Push the backdrop away from the camera along its view ray, then re-scale
  * it to the MINIMUM size that still covers the frame at that new distance.
  * A flat backdrop's apparent size depends only on scale-to-distance ratio,
  * not distance alone — oversizing it while pushing it back is invisible
  * (or reads as zooming in), so this always lands on the least "zoomed"
  * size that leaves no gap, which is the most convincingly distant result.
+ *
+ * Uses the camera's REAL, current fov/aspect (already cover-framed for the
+ * live viewport by applyCoverFraming, which must run first) rather than the
+ * fixed authored constants, so the fit is correct on every screen size —
+ * re-run this on every resize, since a fit sized for one aspect can leave a
+ * gap (or, for rocks, crop) on another.
  */
 function pushSkyBack(camera: THREE.PerspectiveCamera, sky: THREE.Object3D) {
+  resetToAuthoredLocal(sky);
+
   const bounds = cameraSpaceBounds(camera, sky);
 
   if (!bounds) {
     return;
   }
 
-  const fovDegrees = (camera.userData.__authoredFov as number | undefined) ?? camera.fov;
-  const vfov = THREE.MathUtils.degToRad(fovDegrees);
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
   const currentDepth = -(bounds.min.z + bounds.max.z) / 2;
 
   if (currentDepth <= 0) {
@@ -319,7 +349,7 @@ function pushSkyBack(camera: THREE.PerspectiveCamera, sky: THREE.Object3D) {
   sky.updateMatrixWorld(true);
 
   const halfHeight = Math.tan(vfov / 2) * targetDepth;
-  const halfWidth = halfHeight * AUTHORED_ASPECT;
+  const halfWidth = halfHeight * camera.aspect;
   const width = bounds.max.x - bounds.min.x;
   const height = bounds.max.y - bounds.min.y;
 
@@ -333,12 +363,16 @@ function pushSkyBack(camera: THREE.PerspectiveCamera, sky: THREE.Object3D) {
 
 /**
  * Fit the rocks so the COMPLETE image is on screen: scaled to span the
- * authored frame's width and bottom-aligned with the authored frame's
- * lower edge.
+ * frame's actual current width and bottom-aligned with the frame's lower
+ * edge. Sizing against the camera's real, live aspect (see pushSkyBack)
+ * instead of a fixed authored one is what keeps the whole image visible on
+ * narrower screens — a fit sized for a wider aspect overshoots a narrower
+ * frustum's true width and crops off the sides.
  */
 function fitRocksToFrame(camera: THREE.PerspectiveCamera, rocks: THREE.Object3D) {
-  const fovDegrees = (camera.userData.__authoredFov as number | undefined) ?? camera.fov;
-  const vfov = THREE.MathUtils.degToRad(fovDegrees);
+  resetToAuthoredLocal(rocks);
+
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
 
   let bounds = cameraSpaceBounds(camera, rocks);
 
@@ -353,7 +387,7 @@ function fitRocksToFrame(camera: THREE.PerspectiveCamera, rocks: THREE.Object3D)
   }
 
   const halfHeight = Math.tan(vfov / 2) * depth;
-  const halfWidth = halfHeight * AUTHORED_ASPECT;
+  const halfWidth = halfHeight * camera.aspect;
   const width = bounds.max.x - bounds.min.x;
 
   if (width > 0) {
@@ -381,6 +415,29 @@ function fitRocksToFrame(camera: THREE.PerspectiveCamera, rocks: THREE.Object3D)
   rocks.parent?.worldToLocal(targetWorld);
   rocks.position.copy(targetWorld);
   rocks.updateMatrixWorld(true);
+}
+
+/**
+ * Re-fit the sky and rocks to the camera's current frustum. Called once at
+ * first build and again on every resize/orientation change (via
+ * applyCoverFraming's effect), since a fit sized for one aspect ratio can
+ * leave a gap or crop on another. Re-captures their base transform each
+ * time so the designer panel's offsets keep layering on the latest fit.
+ */
+function refitFrameDependentLayers(rig: VortexRig, camera: THREE.PerspectiveCamera | null) {
+  if (!camera) {
+    return;
+  }
+
+  if (rig.sky) {
+    pushSkyBack(camera, rig.sky);
+    captureBaseTransform(rig.sky);
+  }
+
+  if (rig.rocks) {
+    fitRocksToFrame(camera, rig.rocks);
+    captureBaseTransform(rig.rocks);
+  }
 }
 
 /**
@@ -436,11 +493,7 @@ function scaleCastleUp(pitch: THREE.Group, castleParts: THREE.Object3D[]): THREE
  * so the restructure and the animation baselines are only ever captured
  * once.
  */
-function buildVortexRig(
-  gltf: LoadedVortexScene,
-  sceneUrl: string,
-  camera: THREE.PerspectiveCamera | null,
-): VortexRig {
+function buildVortexRig(gltf: LoadedVortexScene, sceneUrl: string): VortexRig {
   const root = gltf.scene;
   const sky = root.getObjectByName('Backdrop_VortexSky') ?? null;
   const rocks = root.getObjectByName('Foreground_Rocks') ?? null;
@@ -536,9 +589,10 @@ function buildVortexRig(
     pitch = rigGroup;
     root.updateMatrixWorld(true);
 
-    // Grow the castle body about its own base, then push the backdrop back
-    // and stretch the foreground rocks across the authored frame — all
-    // one-time structural fits, independent of the scroll/pointer animation.
+    // Grow the castle body about its own base — a one-time structural fit,
+    // independent of the scroll/pointer animation. The sky push-back and
+    // rocks frame-fit are viewport-dependent (they must re-run on resize),
+    // so they happen separately in refitFrameDependentLayers instead.
     const topmostCastleParts = castleParts.filter((object) => {
       let parent = object.parent;
 
@@ -555,23 +609,11 @@ function buildVortexRig(
     const castleRig = scaleCastleUp(pitch, topmostCastleParts);
     root.updateMatrixWorld(true);
 
-    if (camera) {
-      if (sky) {
-        pushSkyBack(camera, sky);
-      }
-
-      if (rocks) {
-        fitRocksToFrame(camera, rocks);
-      }
-    }
-
     // Every debug-adjustable object records its own post-fit rest state, so
     // the designer panel's offsets and (for the sky's scale) the per-frame
     // scroll animation can both layer on top without fighting each other.
     if (castleRig) captureBaseTransform(castleRig);
     if (towers) captureBaseTransform(towers);
-    if (sky) captureBaseTransform(sky);
-    if (rocks) captureBaseTransform(rocks);
 
     root.userData.__castleRig = castleRig;
   }
@@ -644,10 +686,7 @@ function VortexScene({
   const debugOffsetsRef = useRef(createDebugOffsets());
 
   const authoredCamera = useMemo(() => prepareAuthoredCamera(gltf), [gltf]);
-  const rig = useMemo(
-    () => buildVortexRig(gltf, sceneUrl, authoredCamera),
-    [authoredCamera, gltf, sceneUrl],
-  );
+  const rig = useMemo(() => buildVortexRig(gltf, sceneUrl), [gltf, sceneUrl]);
 
   useLayoutEffect(() => {
     if (!authoredCamera) {
@@ -658,15 +697,19 @@ function VortexScene({
     set({ camera: authoredCamera });
   }, [authoredCamera, sceneUrl, set]);
 
-  // Re-fit the authored framing whenever the canvas changes size.
+  // Re-fit the authored framing whenever the canvas changes size, then
+  // re-fit the sky/rocks to that same real frustum — a fit sized for one
+  // aspect ratio can leave a gap (sky) or crop off-screen (rocks) on
+  // another, so both must re-run together on every resize, in this order.
   useLayoutEffect(() => {
     if (!authoredCamera) {
       return;
     }
 
     applyCoverFraming(authoredCamera, size.width / Math.max(size.height, 1));
+    refitFrameDependentLayers(rig, authoredCamera);
     invalidate();
-  }, [authoredCamera, invalidate, size]);
+  }, [authoredCamera, invalidate, rig, size]);
 
   // Let the page-level input listeners wake the demand-rendered canvas.
   useLayoutEffect(() => {
