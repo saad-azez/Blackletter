@@ -158,22 +158,29 @@ function resolveScrollBox(element: HTMLElement): { top: number; height: number }
   return { top: best.top, height: best.height >= 2 ? best.height : viewportHeight };
 }
 
-/** The element to hand the IntersectionObserver: the tallest candidate box, so
-    the scene sleeps/wakes on the real section, not a zero-height shell. */
+/**
+ * The element to hand the IntersectionObserver. It must be chosen
+ * DETERMINISTICALLY (not by measured height, which is 0 at mount before
+ * layout), or the observer ends up watching the zero-height shadow shell —
+ * which browsers treat unreliably and flip to "not intersecting" partway down,
+ * sleeping the on-demand render loop and freezing the picture mid-section.
+ * Inside a Webflow code-island, watch the real section wrapper; otherwise the
+ * element itself.
+ */
 function resolveObserveTarget(element: HTMLElement): Element {
-  let target: Element = element;
-  let bestHeight = element.getBoundingClientRect().height;
+  const root = element.getRootNode();
 
-  sectionHeightCandidates(element).forEach((candidate) => {
-    const height = candidate.getBoundingClientRect().height;
+  if (root instanceof ShadowRoot && root.host instanceof HTMLElement) {
+    const wrapper = root.host.parentElement;
 
-    if (height > bestHeight) {
-      bestHeight = height;
-      target = candidate;
+    if (wrapper && wrapper !== document.body && wrapper !== document.documentElement) {
+      return wrapper;
     }
-  });
 
-  return target;
+    return root.host;
+  }
+
+  return element;
 }
 
 function shapePointerAxis(value: number) {
@@ -894,9 +901,14 @@ function VortexScene({
   const set = useThree((state) => state.set);
   const invalidate = useThree((state) => state.invalidate);
   const size = useThree((state) => state.size);
+  const gl = useThree((state) => state.gl);
   const scrollSmoothRef = useRef(0);
   const pointerSmoothRef = useRef(new THREE.Vector2());
   const debugOffsetsRef = useRef(createDebugOffsets());
+  // Debug (remove with the debug pass): expose the actual render loop so the
+  // page can see whether frames keep drawing and the damped value keeps moving.
+  const frameCountRef = useRef(0);
+  const debugHostRef = useRef<Element | null>(null);
 
   const authoredCamera = useMemo(() => prepareAuthoredCamera(gltf), [gltf]);
   const rig = useMemo(() => buildVortexRig(gltf, sceneUrl), [gltf, sceneUrl]);
@@ -1047,6 +1059,17 @@ function VortexScene({
 
     animateVortexRig(rig, scrollSmoothRef.current, pointer, debugOffsetsRef.current.sky.scale);
 
+    // Debug (remove with the debug pass): publish the live render loop.
+    frameCountRef.current += 1;
+    if (!debugHostRef.current) {
+      const root = gl.domElement.getRootNode();
+      debugHostRef.current = root instanceof ShadowRoot ? root.host : gl.domElement;
+    }
+    if (debugHostRef.current) {
+      debugHostRef.current.setAttribute('data-frames', String(frameCountRef.current));
+      debugHostRef.current.setAttribute('data-scroll-smooth', scrollSmoothRef.current.toFixed(3));
+    }
+
     // Keep frames coming until every damped value has settled on its target.
     const settled =
       Math.abs(scrollSmoothRef.current - scrollTarget.current) < SETTLE_EPSILON &&
@@ -1191,12 +1214,18 @@ export function CastleScene({
       return undefined;
     }
 
+    const rootNode = element.getRootNode();
+    const debugHost: Element = rootNode instanceof ShadowRoot ? rootNode.host : element;
+
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[entries.length - 1];
 
         if (entry) {
-          setFrameloop(entry.isIntersecting ? 'demand' : 'never');
+          const next = entry.isIntersecting ? 'demand' : 'never';
+          // Debug (remove with the debug pass): expose render-loop state.
+          debugHost.setAttribute('data-frameloop', next);
+          setFrameloop(next);
 
           if (entry.isIntersecting) {
             invalidateRef.current();

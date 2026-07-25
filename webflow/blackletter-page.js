@@ -224,9 +224,16 @@ function main() {
       // fix=OLD → the Castle Scene component update is not published yet.
       const fix = island.getAttribute("data-castle-fix") || "OLD(not-published)";
       const actualTgt = island.getAttribute("data-scroll-tgt");
+      // Render-loop signals: does the scene keep DRAWING as you scroll?
+      // frames should keep climbing; frameloop should stay "demand"; smooth is
+      // the actual damped value driving the pitch.
+      const frames = island.getAttribute("data-frames");
+      const frameloop = island.getAttribute("data-frameloop");
+      const smooth = island.getAttribute("data-scroll-smooth");
 
-      return "fix=" + fix + " actualTgt=" + actualTgt +
-             " | debugTgt=" + tgt + " box=" + bestName + " boxTop=" + boxTop + " " + heights +
+      return "fix=" + fix + " frameloop=" + frameloop + " frames=" + frames +
+             " smooth=" + smooth + " actualTgt=" + actualTgt +
+             " | debugTgt=" + tgt + " box=" + bestName + " " + heights +
              " " + canvasInfo + " TOP{" + stack + "}";
     }
 
