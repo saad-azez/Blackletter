@@ -147,6 +147,74 @@ function main() {
       return el ? Math.round(el.getBoundingClientRect().top) : null;
     }
 
+    // Reach into a castle code-island (open shadow root) and report the exact
+    // inputs its scroll/pointer animation depends on:
+    //   shellTop/shellH — the section rect it reads; if this STOPS changing
+    //     while you keep scrolling, the scroll input froze (that's the "stops
+    //     in the middle"). scrollTarget is the -1..+1 value it derives from it.
+    //   canvas — the live WebGL canvas size (0 = not rendering).
+    //   coverEl — what element is on top at the island's centre. If this is
+    //     NOT the island/canvas, something is covering it and swallowing the
+    //     pointermove events (that's "mouse move does nothing").
+    function inspectIsland(hostClass) {
+      const island = Array.prototype.find.call(
+        document.querySelectorAll("code-island"),
+        (el) => el.parentElement && el.parentElement.classList &&
+                el.parentElement.classList.contains(hostClass)
+      );
+      if (!island || !island.shadowRoot) return "(no island)";
+      const shell = island.shadowRoot.querySelector(".castle-scene-shell") ||
+                    island.shadowRoot.querySelector("section") ||
+                    island.shadowRoot.querySelector("div");
+      const canvas = island.shadowRoot.querySelector("canvas");
+      const vh = window.innerHeight || 1;
+      let shellTop = null, shellH = null, scrollTarget = null, coverEl = null;
+      if (shell) {
+        const r = shell.getBoundingClientRect();
+        shellTop = Math.round(r.top);
+        shellH = Math.round(r.height);
+        const h = r.height >= 2 ? r.height : vh;
+        const enter = Math.min(Math.max(r.top / vh, 0), 1);
+        const exit = Math.min(Math.max(-r.top / h, 0), 1);
+        scrollTarget = +(exit - enter).toFixed(3);
+        const cx = Math.min(Math.max(r.left + r.width / 2, 1), window.innerWidth - 1);
+        const cy = Math.min(Math.max(r.top + r.height / 2, 1), vh - 1);
+        const top = document.elementFromPoint(cx, cy);
+        coverEl = top
+          ? top.tagName.toLowerCase() +
+            (typeof top.className === "string" && top.className.trim()
+              ? "." + top.className.trim().split(/\s+/).join(".")
+              : "")
+          : null;
+      }
+      return {
+        shellTop, shellH, scrollTarget,
+        canvas: canvas ? canvas.width + "x" + canvas.height : "(none)",
+        coverEl,
+      };
+    }
+
+    // Are pointermove events even reaching the page, and what's under the
+    // cursor? If coverEl is an overlay, the castle never sees the pointer.
+    let ptrCount = 0, lastPtrLog = 0;
+    window.addEventListener("pointermove", (e) => {
+      ptrCount++;
+      const now = performance.now();
+      if (now - lastPtrLog < 900) return;
+      lastPtrLog = now;
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      log("pointermove", {
+        count: ptrCount,
+        at: Math.round(e.clientX) + "," + Math.round(e.clientY),
+        under: el
+          ? el.tagName.toLowerCase() +
+            (typeof el.className === "string" && el.className.trim()
+              ? "." + el.className.trim().split(/\s+/).join(".")
+              : "")
+          : null,
+      });
+    }, { passive: true });
+
     let winStart = performance.now(), winFrames = 0;
     const intervalId = setInterval(() => {
       const now = performance.now();
@@ -162,9 +230,11 @@ function main() {
           maxDeltaPx: maxDelta,
           scrollY: Math.round(window.scrollY),
           heroTop: heroTop(),
-          lenis: L ? { on: !L.isStopped, vel: +(Number(L.velocity) || 0).toFixed(1), anim: Math.round(Number(L.animatedScroll) || 0) } : "inactive",
+          lenis: L ? { on: !L.isStopped, locked: !!L.isLocked, vel: +(Number(L.velocity) || 0).toFixed(1), anim: Math.round(Number(L.animatedScroll) || 0) } : "inactive",
           paperActive,
           experienceStarted: document.body.classList.contains("experience-started"),
+          castleScene: inspectIsland("castle-scene"),
+          bg3d: inspectIsland("bg-3d"),
         });
       }
       winStart = now; winFrames = frames; scrollEvents = 0; sumDelta = 0; maxDelta = 0;
