@@ -49,8 +49,19 @@ const CASTLE_SCALE = 1.5;
  * composition-fitting system (applyCoverFraming) keeps this framing
  * consistent across every aspect ratio, the same way CASTLE_SCALE already
  * does, so no extra per-viewport handling is needed here.
+ *
+ * Y is set lower than the designer's original 0.08 so the castle's base
+ * consistently sinks behind the rocks billboard instead of leaving a gap
+ * above it — the rocks stay exactly where they are (camera-pinned per
+ * fitRocksAsCameraBillboard); only the castle moved to tuck behind them.
+ * The rocks silhouette isn't a flat line (it dips lower in the middle,
+ * around the entrance, and rises higher at the edges), so this value is
+ * the smallest downward shift that still clears the gap at every point
+ * across the width, on every viewport tested — any less and a gap
+ * reappears at the tallest part of the rocks on narrow/tall screens; any
+ * more needlessly buries the entrance where the rocks are already low.
  */
-const CASTLE_POSITION_OFFSET = new THREE.Vector3(1.3, 0.08, 0);
+const CASTLE_POSITION_OFFSET = new THREE.Vector3(1.3, -0.32, 0);
 const CASTLE_ROTATION_OFFSET_DEG = { x: 0, y: -30, z: 2 };
 const CASTLE_SCALE_MULTIPLIER = 0.9;
 
