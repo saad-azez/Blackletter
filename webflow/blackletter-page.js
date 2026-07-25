@@ -310,7 +310,7 @@ function main() {
           style: "theatre",
           duration: 2.0,
           showLoader: true,
-          loaderColor: "#FFF5D2",
+          loaderColor: paperOne,
           grainOpacity: 1.0,
           warmTint: 0.6,
         });
@@ -408,61 +408,205 @@ function main() {
       }
     }
 
-    /* ---------- preload + load-in reveal ---------- */
-    function preloadHeroAssets(onProgress, onDone) {
-      const codeIsland = bg3d ? bg3d.querySelector("code-island") : null;
-      const urls = [];
+    /* ---------- preload + load-in reveal ----------
+       The loader is genuinely gated: it does NOT auto-complete. The reveal
+       only fires once EVERY page asset is in the browser (images decoded,
+       3D models + textures fetched, the hero 3D canvas actually mounted)
+       plus fonts and the window load event. A safety cap guarantees the
+       user is never trapped if a single request hangs. */
+    const PRELOAD_SAFETY_MS = 20000;
 
-      if (codeIsland) {
-        try {
-          const props = JSON.parse(codeIsland.dataset.props || "{}");
-          ["floorModelUrl", "chessModelUrl", "backgroundImageUrl"].forEach(key => {
-            if (props[key]) urls.push(props[key]);
-          });
-        } catch (e) {}
+    function isImageUrl(url) {
+      return /\.(jpe?g|png|webp|gif|avif|svg)(\?|$)/i.test(url);
+    }
+
+    // Every URL-ish string anywhere in a code-island's data-props: 3D model
+    // files (.glb/.gltf/.bin), backdrops, textures — whatever the island
+    // will load. Recursive so nested prop objects are covered too.
+    function urlsFromProps(value, out) {
+      if (typeof value === "string") {
+        const v = value.trim();
+        if (v && !v.startsWith("data:") &&
+            (/^https?:\/\//i.test(v) ||
+             /\.(glb|gltf|bin|jpe?g|png|webp|gif|avif|svg|ktx2?|hdr|exr|basis|mp4|webm)(\?|$)/i.test(v))) {
+          out.push(v);
+        }
+      } else if (value && typeof value === "object") {
+        Object.keys(value).forEach((k) => urlsFromProps(value[k], out));
       }
+      return out;
+    }
 
-      if (!urls.length) { onProgress(1); onDone(); return; }
+    // Force-load and decode an <img> already in the DOM (including lazy ones
+    // in not-yet-visible sections). Operating on the real element means zero
+    // cache/CORS mismatch with what the browser eventually paints.
+    function decodeImageEl(img) {
+      return new Promise((resolve) => {
+        // Nothing to wait for on an image with no source.
+        if (!img.getAttribute("src") && !img.currentSrc && !img.getAttribute("srcset")) {
+          resolve();
+          return;
+        }
+        try { if (img.loading === "lazy") img.loading = "eager"; } catch (e) {}
+        const done = () => resolve();
+        if (img.complete && img.naturalWidth > 0) {
+          img.decode ? img.decode().then(done, done) : done();
+          return;
+        }
+        if (img.decode) {
+          img.decode().then(done, () => {
+            img.addEventListener("load", done, { once: true });
+            img.addEventListener("error", done, { once: true });
+          });
+        } else {
+          img.addEventListener("load", done, { once: true });
+          img.addEventListener("error", done, { once: true });
+        }
+      });
+    }
 
-      let doneCount = 0;
+    // Warm a raw URL into cache. Images decode; everything else (3D models
+    // especially) is streamed so the bar can track real bytes and never
+    // looks frozen on a big .glb. onFrac reports 0..1 for that one file.
+    function warmUrl(url, onFrac) {
+      return new Promise((resolve) => {
+        if (isImageUrl(url)) {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          const done = () => resolve();
+          img.onload = () => (img.decode ? img.decode().then(done, done) : done());
+          img.onerror = done;
+          img.src = url;
+          return;
+        }
+        fetch(url, { credentials: "omit" }).then((res) => {
+          const len = +(res.headers.get("content-length") || 0);
+          if (!res.ok || !res.body || !len) {
+            return res.arrayBuffer().then(() => resolve(), () => resolve());
+          }
+          const reader = res.body.getReader();
+          let received = 0;
+          const pump = () => reader.read().then(({ done, value }) => {
+            if (done) { resolve(); return; }
+            received += value.length;
+            if (onFrac) onFrac(received / len);
+            pump();
+          }).catch(() => resolve());
+          pump();
+        }).catch(() => resolve());
+      });
+    }
+
+    // Wait until the hero's 3D scene has actually mounted a sized canvas in
+    // its shadow root — i.e. the WebGL scene is live, not just its bytes cached.
+    function waitForHeroSceneCanvas() {
+      return new Promise((resolve) => {
+        const island = (bg3d && bg3d.querySelector("code-island")) ||
+                       document.querySelector("code-island");
+        if (!island) { resolve(); return; }
+        let tries = 0;
+        const timer = setInterval(() => {
+          tries++;
+          const root = island.shadowRoot;
+          const canvas = root && root.querySelector("canvas");
+          if ((canvas && canvas.width > 1 && canvas.height > 1) || tries > 120) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 100);
+      });
+    }
+
+    // Build the full task list: one per page <img>, one per unique code-island
+    // asset URL, one per inline background image, plus the readiness gates.
+    function buildPreloadTasks() {
+      const tasks = [];
+      const seen = new Set();
+
+      document.querySelectorAll("img").forEach((img) => {
+        tasks.push(() => decodeImageEl(img));
+      });
+
+      document.querySelectorAll("code-island").forEach((island) => {
+        let props;
+        try { props = JSON.parse(island.dataset.props || "{}"); } catch (e) { return; }
+        urlsFromProps(props, []).forEach((url) => {
+          if (seen.has(url)) return;
+          seen.add(url);
+          tasks.push((onFrac) => warmUrl(url, onFrac));
+        });
+      });
+
+      document.querySelectorAll('[style*="background-image"]').forEach((el) => {
+        const m = /url\((['"]?)([^'")]+)\1\)/i.exec(el.style.backgroundImage || "");
+        if (!m) return;
+        const url = m[2].trim();
+        if (!url || url.startsWith("data:") || seen.has(url)) return;
+        seen.add(url);
+        tasks.push((onFrac) => warmUrl(url, onFrac));
+      });
+
+      // Readiness gates (binary): fonts, the full window load, the live scene.
+      if (document.fonts && document.fonts.ready) {
+        tasks.push(() => new Promise((res) => document.fonts.ready.then(res, res)));
+      }
+      tasks.push(() => new Promise((res) => {
+        if (document.readyState === "complete") res();
+        else window.addEventListener("load", res, { once: true });
+      }));
+      tasks.push(() => waitForHeroSceneCanvas());
+
+      return tasks;
+    }
+
+    function preloadEverything(onProgress, onDone) {
+      const tasks = buildPreloadTasks();
+      const total = tasks.length || 1;
+      const fractions = new Array(total).fill(0);
+      let remaining = total;
       let finished = false;
 
-      function complete() {
+      function report() {
+        let sum = 0;
+        for (let i = 0; i < total; i++) sum += fractions[i];
+        onProgress(Math.min(1, sum / total));
+      }
+
+      function finish() {
         if (finished) return;
         finished = true;
-        clearTimeout(safetyTimer);
+        clearTimeout(safety);
+        onProgress(1);
         onDone();
       }
 
-      function tick() {
-        doneCount++;
-        onProgress(doneCount / urls.length);
-        if (doneCount >= urls.length) complete();
-      }
+      const safety = setTimeout(finish, PRELOAD_SAFETY_MS);
 
-      const safetyTimer = setTimeout(() => {
-        onProgress(1);
-        complete();
-      }, 10000);
+      if (!tasks.length) { finish(); return; }
 
-      urls.forEach(url => {
-        if (/\.(jpe?g|png|webp|gif|avif)(\?|$)/i.test(url)) {
-          const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.onload = tick;
-          img.onerror = tick;
-          img.src = url;
-        } else {
-          fetch(url).then(r => r.arrayBuffer()).then(tick).catch(tick);
-        }
+      tasks.forEach((task, i) => {
+        const onFrac = (f) => {
+          const clamped = f < 0 ? 0 : f > 1 ? 1 : f;
+          if (clamped > fractions[i]) { fractions[i] = clamped; report(); }
+        };
+        const settle = () => {
+          fractions[i] = 1;
+          report();
+          if (--remaining <= 0) finish();
+        };
+        Promise.resolve()
+          .then(() => task(onFrac))
+          .then(settle, settle);
       });
+
+      report();
     }
 
     if (paperEffect && canvasWrap) {
       gsap.set(canvasWrap, { autoAlpha: 1, background: paperOne, pointerEvents: "none" });
       setPaperColors(paperTwo, paperOne);
 
-      preloadHeroAssets(
+      preloadEverything(
         (progress) => paperEffect.setLoadProgress(progress),
         () => {
           paperEffect.in();
