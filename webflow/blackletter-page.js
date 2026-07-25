@@ -156,6 +156,16 @@ function main() {
     //   coverEl — what element is on top at the island's centre. If this is
     //     NOT the island/canvas, something is covering it and swallowing the
     //     pointermove events (that's "mouse move does nothing").
+    // Compact "tag.firstclass" for whatever sits on top at a viewport point.
+    function topElAt(x, y) {
+      const el = document.elementFromPoint(x, y);
+      if (!el) return "null";
+      const cls = typeof el.className === "string" && el.className.trim()
+        ? "." + el.className.trim().split(/\s+/)[0]
+        : (el.id ? "#" + el.id : "");
+      return el.tagName.toLowerCase() + cls;
+    }
+
     function inspectIsland(hostClass) {
       const island = Array.prototype.find.call(
         document.querySelectorAll("code-island"),
@@ -163,39 +173,55 @@ function main() {
                 el.parentElement.classList.contains(hostClass)
       );
       if (!island || !island.shadowRoot) return "(no island)";
-      const shell = island.shadowRoot.querySelector(".castle-scene-shell") ||
-                    island.shadowRoot.querySelector("section") ||
-                    island.shadowRoot.querySelector("div");
+
       const canvas = island.shadowRoot.querySelector("canvas");
       const vh = window.innerHeight || 1;
-      // Which element actually carries the section's real height? (shell = 0)
-      const islandH = Math.round(island.getBoundingClientRect().height);
-      const wrap = island.parentElement;
-      const wrapH = wrap ? Math.round(wrap.getBoundingClientRect().height) : null;
-      const canvasCssH = canvas ? Math.round(canvas.getBoundingClientRect().height) : null;
-      let shellTop = null, shellH = null, scrollTarget = null, coverEl = null;
-      if (shell) {
-        const r = shell.getBoundingClientRect();
-        shellTop = Math.round(r.top);
-        shellH = Math.round(r.height);
-        const h = r.height >= 2 ? r.height : vh;
-        const enter = Math.min(Math.max(r.top / vh, 0), 1);
-        const exit = Math.min(Math.max(-r.top / h, 0), 1);
-        scrollTarget = +(exit - enter).toFixed(3);
-        const cx = Math.min(Math.max(r.left + r.width / 2, 1), window.innerWidth - 1);
-        const cy = Math.min(Math.max(r.top + r.height / 2, 1), vh - 1);
-        const top = document.elementFromPoint(cx, cy);
-        coverEl = top
-          ? top.tagName.toLowerCase() +
-            (typeof top.className === "string" && top.className.trim()
-              ? "." + top.className.trim().split(/\s+/).join(".")
-              : "")
-          : null;
+      const iw = window.innerWidth || 1;
+
+      // The tallest of shell / island host / Webflow wrapper = the real
+      // scroll box (mirrors the CastleScene fix). Report which one it is and
+      // the scroll target it yields.
+      const shell = island.shadowRoot.querySelector(".castle-scene-shell") ||
+                    island.shadowRoot.querySelector("section");
+      const boxes = [["shell", shell], ["island", island], ["wrap", island.parentElement]];
+      let bestName = "none", bestRect = null, bestH = -1;
+      boxes.forEach(([name, el]) => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        if (r.height > bestH) { bestH = r.height; bestRect = r; bestName = name; }
+      });
+      let tgt = null, boxTop = null;
+      if (bestRect) {
+        boxTop = Math.round(bestRect.top);
+        const h = bestRect.height >= 2 ? bestRect.height : vh;
+        const enter = Math.min(Math.max(bestRect.top / vh, 0), 1);
+        const exit = Math.min(Math.max(-bestRect.top / h, 0), 1);
+        tgt = +(exit - enter).toFixed(3);
       }
-      return "shellTop=" + shellTop + " shellH=" + shellH + " tgt=" + scrollTarget +
-             " | islandH=" + islandH + " wrapH=" + wrapH + " canvasCssH=" + canvasCssH +
-             " canvasBuf=" + (canvas ? canvas.width + "x" + canvas.height : "none") +
-             " cover=" + coverEl;
+
+      const heights = "H{shell=" + (shell ? Math.round(shell.getBoundingClientRect().height) : "-") +
+        " island=" + Math.round(island.getBoundingClientRect().height) +
+        " wrap=" + (island.parentElement ? Math.round(island.parentElement.getBoundingClientRect().height) : "-") + "}";
+
+      // Canvas geometry + how it's positioned/stacked, and — the key check —
+      // what element is actually on top at 20/50/80% down the CANVAS. If those
+      // are not the code-island/canvas, something is covering the castle.
+      let canvasInfo = "canvas=none", stack = "";
+      if (canvas) {
+        const cr = canvas.getBoundingClientRect();
+        const cs = getComputedStyle(canvas);
+        canvasInfo = "canvas[top=" + Math.round(cr.top) + " bot=" + Math.round(cr.bottom) +
+          " h=" + Math.round(cr.height) + " pos=" + cs.position + " z=" + cs.zIndex +
+          " vis=" + cs.visibility + " op=" + cs.opacity + "]";
+        const cx = Math.min(Math.max(cr.left + cr.width / 2, 1), iw - 1);
+        stack = [0.2, 0.5, 0.8].map((f) => {
+          const y = Math.min(Math.max(cr.top + cr.height * f, 1), vh - 1);
+          return (f * 100) + "%=" + topElAt(cx, y);
+        }).join(" ");
+      }
+
+      return "box=" + bestName + " boxTop=" + boxTop + " tgt=" + tgt + " " + heights +
+             " " + canvasInfo + " TOP{" + stack + "}";
     }
 
     // Are pointermove events even reaching the page, and what's under the
