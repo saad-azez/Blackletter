@@ -220,7 +220,13 @@ function main() {
         }).join(" ");
       }
 
-      return "box=" + bestName + " boxTop=" + boxTop + " tgt=" + tgt + " " + heights +
+      // Version marker + REAL scroll target the deployed component computes.
+      // fix=OLD → the Castle Scene component update is not published yet.
+      const fix = island.getAttribute("data-castle-fix") || "OLD(not-published)";
+      const actualTgt = island.getAttribute("data-scroll-tgt");
+
+      return "fix=" + fix + " actualTgt=" + actualTgt +
+             " | debugTgt=" + tgt + " box=" + bestName + " boxTop=" + boxTop + " " + heights +
              " " + canvasInfo + " TOP{" + stack + "}";
     }
 

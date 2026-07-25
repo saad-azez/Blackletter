@@ -1152,6 +1152,13 @@ export function CastleScene({
       return undefined;
     }
 
+    // Debug marker (remove with the debug pass): stamp the shadow host so the
+    // page script can confirm THIS build is live and read the real scroll
+    // target this component actually computes.
+    const rootNode = element.getRootNode();
+    const debugHost: Element = rootNode instanceof ShadowRoot ? rootNode.host : element;
+    debugHost.setAttribute('data-castle-fix', 'wrapbox-v1');
+
     const updateScroll = () => {
       // Measure the real section box (walks out to the Webflow wrapper when the
       // component's own <section> is a zero-height shadow-DOM shell), so the
@@ -1162,6 +1169,7 @@ export function CastleScene({
       const exit = THREE.MathUtils.clamp(-top / height, 0, 1);
 
       scrollTarget.current = exit - enter;
+      debugHost.setAttribute('data-scroll-tgt', scrollTarget.current.toFixed(3));
       invalidateRef.current();
     };
 
