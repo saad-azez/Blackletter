@@ -62,6 +62,119 @@ function main() {
   })();
 
   /* ============================================================
+     SCROLL DIAGNOSTICS (TEMPORARY — remove once resolved)
+     Logs why the scroll feels the way it does. Prints a compact
+     [scroll-debug] "sample" line once per second WHILE scrolling:
+
+       fps         — frame rate that second. <~45 while scrolling =
+                     the jank is heavy 3D dropping frames, NOT the
+                     scroll library (Lenis can't fix a slow paint).
+       scrollEvents/avgDeltaPx/maxDeltaPx — cadence. Small deltas
+                     (~2-10px) over many events = smooth/interpolated.
+                     Big deltas (~30-120px) over few events = stepped
+                     wheel scroll (Lenis not smoothing this stretch).
+       lenis       — "inactive" means it never loaded (import blocked /
+                     reduced-motion). on:false means it loaded but is
+                     PAUSED (a paper transition is holding it).
+       paperActive — true means a curtain/snap is covering, so Lenis is
+                     intentionally paused; if this is true during the
+                     jank, the castle is animating inside a snap glide.
+       heroTop     — the castle section's rect.top; watch it move.
+
+     Disable by setting window.__BLACKLETTER_SCROLL_DEBUG__ = false.
+     ============================================================ */
+  (function scrollDebug() {
+    if (window.__BLACKLETTER_SCROLL_DEBUG__ === false) return;
+    const TAG = "[scroll-debug]";
+    const log = (...a) => console.log(TAG, ...a);
+
+    log("boot", {
+      reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      hasGSAP: !!window.gsap,
+      hasScrollTrigger: !!window.ScrollTrigger,
+      dpr: window.devicePixelRatio,
+      viewport: window.innerWidth + "x" + window.innerHeight,
+      ua: navigator.userAgent,
+    });
+
+    // Did Lenis actually load? (it imports asynchronously)
+    setTimeout(() => {
+      const L = window.__lenis;
+      if (L) log("lenis ACTIVE", { isStopped: !!L.isStopped, duration: L.options && L.options.duration });
+      else log("lenis NOT active — import blocked, reduced-motion, or disabled");
+    }, 2500);
+
+    // One-time inventory of the 3D islands and whether they've mounted.
+    setTimeout(() => {
+      const islands = Array.prototype.map.call(
+        document.querySelectorAll("code-island"),
+        (el, i) => ({
+          i,
+          host: (el.parentElement && el.parentElement.className) || "?",
+          hasShadow: !!el.shadowRoot,
+          hasCanvas: !!(el.shadowRoot && el.shadowRoot.querySelector("canvas")),
+        })
+      );
+      log("code-islands", islands.length ? islands : "(none found)");
+    }, 1800);
+
+    // Paper transitions pause Lenis; log each so we can see if they fire
+    // constantly (which would keep scroll un-smoothed).
+    let paperActive = false;
+    window.addEventListener("blackletter:paper-transition", (e) => {
+      const d = e.detail || {};
+      paperActive = d.phase === "start";
+      log("paper-transition", d.phase, "towards:", d.towards);
+    });
+
+    // Cheap continuous frame counter for FPS.
+    let frames = 0;
+    (function raf() { frames++; requestAnimationFrame(raf); })();
+
+    // Scroll cadence accumulators.
+    let scrollEvents = 0, sumDelta = 0, maxDelta = 0, lastY = window.scrollY, lastScrollT = 0;
+    window.addEventListener("scroll", () => {
+      const y = window.scrollY;
+      const dy = Math.abs(y - lastY);
+      lastY = y; scrollEvents++; sumDelta += dy; if (dy > maxDelta) maxDelta = dy;
+      lastScrollT = performance.now();
+    }, { passive: true });
+
+    function heroTop() {
+      const el = document.querySelector(".bg-3d") ||
+                 document.querySelector(".hero-section") ||
+                 document.querySelector("code-island");
+      return el ? Math.round(el.getBoundingClientRect().top) : null;
+    }
+
+    let winStart = performance.now(), winFrames = 0;
+    const intervalId = setInterval(() => {
+      const now = performance.now();
+      const secs = (now - winStart) / 1000 || 1;
+      const fps = Math.round((frames - winFrames) / secs);
+      const scrolledRecently = now - lastScrollT < 1100;
+      if (scrolledRecently) {
+        const L = window.__lenis;
+        log("sample", {
+          fps,
+          scrollEvents,
+          avgDeltaPx: scrollEvents ? +(sumDelta / scrollEvents).toFixed(1) : 0,
+          maxDeltaPx: maxDelta,
+          scrollY: Math.round(window.scrollY),
+          heroTop: heroTop(),
+          lenis: L ? { on: !L.isStopped, vel: +(Number(L.velocity) || 0).toFixed(1), anim: Math.round(Number(L.animatedScroll) || 0) } : "inactive",
+          paperActive,
+          experienceStarted: document.body.classList.contains("experience-started"),
+        });
+      }
+      winStart = now; winFrames = frames; scrollEvents = 0; sumDelta = 0; maxDelta = 0;
+    }, 1000);
+    window.__scrollDebugStop = () => { clearInterval(intervalId); log("stopped"); };
+
+    log("ready — scroll the page; one 'sample' line prints per second while scrolling");
+  })();
+
+  /* ============================================================
      1a. SHARED UTILS — defined once, used by every section
      ============================================================ */
 
