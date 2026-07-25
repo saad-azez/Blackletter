@@ -326,31 +326,22 @@ function main() {
     while (heldIntros.length) heldIntros.shift()();
   }
 
-  // Resume smooth scroll and snap Lenis's internal value to wherever the
-  // transition left the real scroll, so there's no post-curtain jump.
-  function resumeSmoothScroll() {
-    if (!lenis) return;
-    lenis.start();
-    lenis.scrollTo(window.scrollY, { immediate: true, force: true });
-  }
-
   window.addEventListener("blackletter:paper-transition", (event) => {
     const phase = event.detail && event.detail.phase;
     clearTimeout(paperFailsafeTimer);
     if (phase === "start") {
       paperTransitionActive = true;
-      // Pause Lenis so its animated scroll can't override the curtain's
-      // programmatic window.scrollTo while the screen is covered.
-      if (lenis) lenis.stop();
+      // Lenis is intentionally NOT paused here: the transitions now drive the
+      // cross-boundary scroll through Lenis themselves (lenis.scrollTo), so the
+      // whole page turn stays one smooth, interpolated motion. Pausing it would
+      // freeze that glide.
       // Never hold reveals hostage if an "end" gets lost somehow.
       paperFailsafeTimer = setTimeout(() => {
         paperTransitionActive = false;
-        resumeSmoothScroll();
         flushHeldIntros();
       }, 10000);
     } else {
       paperTransitionActive = false;
-      resumeSmoothScroll();
       flushHeldIntros();
     }
   });
@@ -1061,7 +1052,16 @@ function main() {
       try { effect._resize(); } catch (err) {}
     });
 
+    // Move scroll through Lenis when present so the loop's glide-home is one
+    // smooth motion in sync with the smooth-scroll instance.
+    const setScroll = (y) => {
+      if (window.__lenis) window.__lenis.scrollTo(y, { immediate: true, force: true });
+      else window.scrollTo(0, y);
+    };
+
     const holdScroll = () => {
+      // Lenis drives the position during the loop; only pin in the fallback.
+      if (window.__lenis) return;
       if (window.scrollY !== pinnedY) window.scrollTo(0, pinnedY);
     };
 
@@ -1126,7 +1126,7 @@ function main() {
         ease: "power2.inOut",
         onUpdate: () => {
           pinnedY = Math.round(scrollProxy.y);
-          window.scrollTo(0, pinnedY);
+          setScroll(pinnedY);
         },
       }, CLOSE_DUR);
       tl.to(effect.state, { progress: 1, duration: OPEN_DUR, ease: "power2.inOut" }, CLOSE_DUR + GLIDE_DUR);
@@ -1153,7 +1153,7 @@ function main() {
       event.preventDefault();
       event.stopImmediatePropagation();
 
-      if (dist > 0) window.scrollTo(0, window.scrollY + dist);
+      if (dist > 0) setScroll(window.scrollY + dist);
       runLoop();
     }
 

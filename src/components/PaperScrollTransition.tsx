@@ -4,6 +4,21 @@ import PaperCurtainEffect from './BlackletterPaperCurtain.mjs';
 
 export type PaperScrollDirection = 'Bottom to Top' | 'Top to Bottom';
 
+/** Minimal shape of the page's Lenis instance (exposed as window.__lenis). */
+interface LenisLike {
+  scrollTo: (
+    target: number,
+    options?: {
+      duration?: number;
+      easing?: (t: number) => number;
+      immediate?: boolean;
+      lock?: boolean;
+      force?: boolean;
+      onComplete?: () => void;
+    },
+  ) => void;
+}
+
 export interface PaperScrollTransitionProps {
   /** Paper colour for the sheet and torn band. */
   color?: string;
@@ -198,6 +213,23 @@ export function PaperScrollTransition({
     let lastTouchY: number | null = null;
     let pinnedScrollY = 0;
 
+    // Drive scroll through the page's Lenis smooth-scroll instance when it
+    // exists, so the whole transition (including the cross-boundary glide) is
+    // one smooth, interpolated motion instead of a hard window.scrollTo lock.
+    // A raw window.scrollTo would also just be overridden by Lenis next frame.
+    const getLenis = () =>
+      (window as unknown as { __lenis?: LenisLike }).__lenis || null;
+
+    const jumpScroll = (y: number) => {
+      const lenis = getLenis();
+
+      if (lenis) {
+        lenis.scrollTo(y, { immediate: true, force: true });
+      } else {
+        window.scrollTo(0, y);
+      }
+    };
+
     const ensureEffect = () => {
       if (effect || destroyed) {
         return;
@@ -277,7 +309,12 @@ export function PaperScrollTransition({
 
     const lockScroll = () => {
       pinnedScrollY = window.scrollY;
-      window.addEventListener('scroll', holdScrollPosition, { passive: true });
+      // With Lenis driving the glide, pinning against every scroll event would
+      // fight it; user input is already blocked by the capture handlers, and
+      // Lenis's own `lock` covers the glide. Keep the pin only as the fallback.
+      if (!getLenis()) {
+        window.addEventListener('scroll', holdScrollPosition, { passive: true });
+      }
       window.addEventListener('touchmove', preventTouchScroll, { passive: false });
     };
 
@@ -357,6 +394,35 @@ export function PaperScrollTransition({
           0,
           towards === 'next' ? fromY + bottom : fromY + bottom - window.innerHeight,
         );
+
+        const onGlideDone = () => {
+          if (destroyed || !effect) {
+            finishTransition();
+            return;
+          }
+
+          pinnedScrollY = targetY;
+          effect.setAxisFlip(!coverFlip);
+          tweenProgress(1, 0, finishTransition);
+        };
+
+        const lenis = getLenis();
+
+        if (lenis) {
+          // Hand the cross-boundary scroll to Lenis: one smooth, eased,
+          // interpolated motion instead of a hard-locked window.scrollTo jump.
+          pinnedScrollY = targetY;
+          lenis.scrollTo(targetY, {
+            duration: SNAP_GLIDE_MS / 1000,
+            easing: easeInOutCubic,
+            lock: true,
+            force: true,
+            onComplete: onGlideDone,
+          });
+
+          return;
+        }
+
         const glideStart = performance.now();
 
         const glide = (now: number) => {
@@ -377,8 +443,7 @@ export function PaperScrollTransition({
             return;
           }
 
-          effect.setAxisFlip(!coverFlip);
-          tweenProgress(1, 0, finishTransition);
+          onGlideDone();
         };
 
         tweenRaf = requestAnimationFrame(glide);
@@ -428,7 +493,7 @@ export function PaperScrollTransition({
         }
 
         if (rect.bottom > viewportHeight + 2) {
-          window.scrollTo(0, window.scrollY + (rect.bottom - viewportHeight));
+          jumpScroll(window.scrollY + (rect.bottom - viewportHeight));
         }
 
         runTransition('next');
@@ -450,7 +515,7 @@ export function PaperScrollTransition({
       }
 
       if (Math.abs(rect.bottom) > 2) {
-        window.scrollTo(0, window.scrollY + rect.bottom);
+        jumpScroll(window.scrollY + rect.bottom);
       }
 
       runTransition('previous');
@@ -554,7 +619,7 @@ export function PaperScrollTransition({
         rect.bottom < viewportHeight - 2 &&
         rect.bottom > viewportHeight - clampWindow
       ) {
-        window.scrollTo(0, scrollY - (viewportHeight - rect.bottom));
+        jumpScroll(scrollY - (viewportHeight - rect.bottom));
 
         if (performance.now() >= transitionBus.cooldownUntil) {
           runTransition('next');
@@ -564,7 +629,7 @@ export function PaperScrollTransition({
       }
 
       if (goingUp && rect.bottom > 2 && rect.bottom < clampWindow) {
-        window.scrollTo(0, scrollY + rect.bottom);
+        jumpScroll(scrollY + rect.bottom);
 
         if (performance.now() >= transitionBus.cooldownUntil) {
           runTransition('previous');
