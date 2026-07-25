@@ -17,6 +17,10 @@ interface LenisLike {
       onComplete?: () => void;
     },
   ) => void;
+  /** Where Lenis is heading (leads the visible position). */
+  targetScroll?: number;
+  /** The current interpolated scroll position. */
+  animatedScroll?: number;
 }
 
 export interface PaperScrollTransitionProps {
@@ -219,16 +223,6 @@ export function PaperScrollTransition({
     // A raw window.scrollTo would also just be overridden by Lenis next frame.
     const getLenis = () =>
       (window as unknown as { __lenis?: LenisLike }).__lenis || null;
-
-    const jumpScroll = (y: number) => {
-      const lenis = getLenis();
-
-      if (lenis) {
-        lenis.scrollTo(y, { immediate: true, force: true });
-      } else {
-        window.scrollTo(0, y);
-      }
-    };
 
     const ensureEffect = () => {
       if (effect || destroyed) {
@@ -450,25 +444,72 @@ export function PaperScrollTransition({
       });
     };
 
-    /**
-     * Capture a scroll intent (wheel/touch/key) at the boundary. Returns true
-     * when the event was consumed. The transition starts with the viewport
-     * pixel-aligned inside this section, so the neighbour is never shown.
-     *
-     * `projectedDelta` is how far the intercepted event would scroll: the
-     * capture window stretches by that amount, so an aggressive fling that
-     * would sail across the boundary is caught and converted into "land
-     * exactly on the boundary" instead of overshooting and being clamped
-     * back (which reads as a bounce).
-     */
-    const captureIntent = (towardsNext: boolean, projectedDelta = 0) => {
+    // =====================================================================
+    // BOUNDARY CROSSING
+    //
+    // With Lenis (the normal case) Lenis owns the scroll. We watch where it is
+    // HEADING — targetScroll leads the visible position — and start the
+    // transition the instant that lead crosses a section boundary, BEFORE the
+    // visible scroll can shoot past and get pulled back. That pull-back, from
+    // Lenis overshooting and being clamped, was the bounce. No clamp now: the
+    // page never crosses, so there is nothing to yank back.
+    //
+    // Without Lenis we fall back to predicting from the raw wheel/touch delta.
+    // =====================================================================
+
+    const TARGET_TRIGGER_PX = 6;
+
+    // How close (past the section top) the lead must be before we start
+    // watching for a downward crossing — one viewport, so a hard fling is
+    // caught as it nears the end but the section still scrolls normally.
+    const APPROACH_BAND = () => window.innerHeight;
+
+    const lenisBoundaryCheck = (rect: DOMRect, lenis: LenisLike) => {
+      if (performance.now() < transitionBus.cooldownUntil) {
+        return;
+      }
+
+      const viewportHeight = window.innerHeight;
+      const scrollY = window.scrollY;
+      const target =
+        typeof lenis.targetScroll === 'number' ? lenis.targetScroll : scrollY;
+
+      // Down: inside this section, its end within reach below the viewport
+      // bottom, and Lenis heading past where the section ends.
+      if (
+        rect.top <= 2 &&
+        rect.bottom >= viewportHeight - 2 &&
+        rect.bottom <= viewportHeight + APPROACH_BAND()
+      ) {
+        const boundaryY = scrollY + (rect.bottom - viewportHeight);
+
+        if (target > boundaryY + TARGET_TRIGGER_PX) {
+          runTransition('next');
+          return;
+        }
+      }
+
+      // Up: the following section's top is in view and Lenis is heading back up
+      // across this section's end.
+      if (rect.bottom >= -2 && rect.bottom <= CAPTURE_WINDOW_PX) {
+        const boundaryY = scrollY + rect.bottom;
+
+        if (target < boundaryY - TARGET_TRIGGER_PX) {
+          runTransition('previous');
+        }
+      }
+    };
+
+    // Fallback (no Lenis): predict from the raw delta and start at the boundary.
+    // `projectedDelta` widens the window so a fling lands on the boundary
+    // instead of sailing across it.
+    const nativeCaptureIntent = (towardsNext: boolean, projectedDelta = 0) => {
       if (destroyed || running || transitionBus.active || foreignBus.active) {
         return running || transitionBus.active || foreignBus.active;
       }
 
       const rect = measure();
 
-      // No section, or a section without layout (hidden) — never capture.
       if (!rect || rect.height < 2) {
         return false;
       }
@@ -477,8 +518,6 @@ export function PaperScrollTransition({
       const reach = Math.max(0, projectedDelta);
 
       if (towardsNext) {
-        // At this section's end while fully inside it, or close enough that
-        // the incoming scroll step would cross it.
         const atEnd =
           rect.top <= 2 &&
           rect.bottom >= viewportHeight - 2 &&
@@ -493,16 +532,13 @@ export function PaperScrollTransition({
         }
 
         if (rect.bottom > viewportHeight + 2) {
-          jumpScroll(window.scrollY + (rect.bottom - viewportHeight));
+          window.scrollTo(0, window.scrollY + (rect.bottom - viewportHeight));
         }
 
         runTransition('next');
-
         return true;
       }
 
-      // Heading back up: the viewport sits at (or, with a large step, would
-      // cross) the top of the following section.
       const atFollowingTop =
         rect.bottom >= -(2 + reach) && rect.bottom <= CAPTURE_WINDOW_PX;
 
@@ -515,26 +551,39 @@ export function PaperScrollTransition({
       }
 
       if (Math.abs(rect.bottom) > 2) {
-        jumpScroll(window.scrollY + rect.bottom);
+        window.scrollTo(0, window.scrollY + rect.bottom);
       }
 
       runTransition('previous');
-
       return true;
     };
 
-    const onWheel = (event: WheelEvent) => {
-      if (event.deltaY === 0) {
+    // Is any transition (ours or a foreign one) currently covering the screen?
+    const transitionCovering = () =>
+      running || transitionBus.active || foreignBus.active;
+
+    // Capture-phase input. While a transition covers the screen, swallow every
+    // scroll input outright so nothing — not even Lenis — moves the page under
+    // the sheet. Otherwise: with Lenis, let it flow (the crossing is caught
+    // from Lenis's lead target in `update`); without Lenis, drive prediction.
+    const onWheelCapture = (event: WheelEvent) => {
+      if (transitionCovering()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
         return;
       }
 
-      // Normalise the wheel step to pixels (line/page delta modes).
+      if (getLenis() || event.deltaY === 0) {
+        return;
+      }
+
       const unit =
         event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? window.innerHeight : 1;
       const step = Math.abs(event.deltaY) * unit;
 
-      if (captureIntent(event.deltaY > 0, step)) {
+      if (nativeCaptureIntent(event.deltaY > 0, step)) {
         event.preventDefault();
+        event.stopImmediatePropagation();
       }
     };
 
@@ -542,7 +591,17 @@ export function PaperScrollTransition({
       lastTouchY = event.touches[0]?.clientY ?? null;
     };
 
-    const onTouchMove = (event: TouchEvent) => {
+    const onTouchMoveCapture = (event: TouchEvent) => {
+      if (transitionCovering()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+
+      if (getLenis()) {
+        return;
+      }
+
       const currentY = event.touches[0]?.clientY;
 
       if (currentY == null || lastTouchY == null) {
@@ -550,15 +609,15 @@ export function PaperScrollTransition({
       }
 
       const delta = lastTouchY - currentY; // finger up = scroll down
-
       lastTouchY = currentY;
 
-      if (delta !== 0 && captureIntent(delta > 0, Math.abs(delta))) {
+      if (delta !== 0 && nativeCaptureIntent(delta > 0, Math.abs(delta))) {
         event.preventDefault();
+        event.stopImmediatePropagation();
       }
     };
 
-    const onKeyDown = (event: KeyboardEvent) => {
+    const onKeyDownCapture = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) {
         return;
       }
@@ -568,20 +627,38 @@ export function PaperScrollTransition({
       const isDown = downKeys.includes(event.key) || (event.key === ' ' && !event.shiftKey);
       const isUp = upKeys.includes(event.key) || (event.key === ' ' && event.shiftKey);
 
-      // Arrows nudge ~a hundred pixels; paging keys jump about a viewport.
-      const step = event.key === 'ArrowDown' || event.key === 'ArrowUp' ? 120 : window.innerHeight;
+      if (!isDown && !isUp) {
+        return;
+      }
 
-      if ((isDown || isUp) && captureIntent(isDown, step)) {
+      if (transitionCovering()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+
+      const step = event.key === 'ArrowDown' || event.key === 'ArrowUp' ? 120 : window.innerHeight;
+      const lenis = getLenis();
+
+      if (lenis) {
+        // Route keyboard scrolling through Lenis so it stays smooth and the
+        // boundary watcher in `update` can catch a crossing.
+        event.preventDefault();
+        lenis.scrollTo(window.scrollY + (isDown ? step : -step), { force: true });
+        return;
+      }
+
+      if (nativeCaptureIntent(isDown, step)) {
         event.preventDefault();
       }
     };
 
-    // Momentum and scrollbar drags produce no capturable events; if they bleed
-    // across the boundary between frames, clamp straight back and transition.
+    // Runs on every scroll frame. With Lenis it watches the lead target; without
+    // Lenis it clamps momentum that slipped across the boundary between frames.
     const update = () => {
       scrollRaf = null;
 
-      if (destroyed || running || transitionBus.active || foreignBus.active) {
+      if (destroyed || transitionCovering()) {
         return;
       }
 
@@ -598,7 +675,6 @@ export function PaperScrollTransition({
       }
 
       const viewportHeight = window.innerHeight;
-      const clampWindow = viewportHeight * CLAMP_WINDOW_FRACTION;
 
       // A section without layout (hidden until the experience starts, or a
       // collapsed wrapper) has no meaningful boundary — stay fully inert.
@@ -614,12 +690,21 @@ export function PaperScrollTransition({
         ensureEffect();
       }
 
+      const lenis = getLenis();
+
+      if (lenis) {
+        lenisBoundaryCheck(rect, lenis);
+        return;
+      }
+
+      const clampWindow = viewportHeight * CLAMP_WINDOW_FRACTION;
+
       if (
         goingDown &&
         rect.bottom < viewportHeight - 2 &&
         rect.bottom > viewportHeight - clampWindow
       ) {
-        jumpScroll(scrollY - (viewportHeight - rect.bottom));
+        window.scrollTo(0, scrollY - (viewportHeight - rect.bottom));
 
         if (performance.now() >= transitionBus.cooldownUntil) {
           runTransition('next');
@@ -629,7 +714,7 @@ export function PaperScrollTransition({
       }
 
       if (goingUp && rect.bottom > 2 && rect.bottom < clampWindow) {
-        jumpScroll(scrollY + rect.bottom);
+        window.scrollTo(0, scrollY + rect.bottom);
 
         if (performance.now() >= transitionBus.cooldownUntil) {
           runTransition('previous');
@@ -649,10 +734,12 @@ export function PaperScrollTransition({
       update();
       window.addEventListener('scroll', schedule, { passive: true });
       window.addEventListener('resize', schedule, { passive: true });
-      window.addEventListener('wheel', onWheel, { passive: false });
-      window.addEventListener('touchstart', onTouchStart, { passive: true });
-      window.addEventListener('touchmove', onTouchMove, { passive: false });
-      window.addEventListener('keydown', onKeyDown);
+      // Capture phase so we can beat Lenis's own wheel/touch handlers and
+      // block input outright while the sheet covers the screen.
+      window.addEventListener('wheel', onWheelCapture, { passive: false, capture: true });
+      window.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
+      window.addEventListener('touchmove', onTouchMoveCapture, { passive: false, capture: true });
+      window.addEventListener('keydown', onKeyDownCapture, { capture: true });
     }, 80);
 
     return () => {
@@ -660,10 +747,10 @@ export function PaperScrollTransition({
       clearTimeout(timer);
       window.removeEventListener('scroll', schedule);
       window.removeEventListener('resize', schedule);
-      window.removeEventListener('wheel', onWheel);
-      window.removeEventListener('touchstart', onTouchStart);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('wheel', onWheelCapture, { capture: true } as EventListenerOptions);
+      window.removeEventListener('touchstart', onTouchStart, { capture: true } as EventListenerOptions);
+      window.removeEventListener('touchmove', onTouchMoveCapture, { capture: true } as EventListenerOptions);
+      window.removeEventListener('keydown', onKeyDownCapture, { capture: true } as EventListenerOptions);
 
       if (scrollRaf !== null) {
         cancelAnimationFrame(scrollRaf);

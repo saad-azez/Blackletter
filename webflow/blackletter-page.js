@@ -51,8 +51,14 @@ function main() {
         duration: 1.15,
         easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
         smoothWheel: true,
-        syncTouch: false,
+        // Touch flows through Lenis too, so section boundaries are detected the
+        // same way on mobile as on desktop (from Lenis's lead target) and the
+        // whole experience is uniformly smooth across devices.
+        syncTouch: true,
+        syncTouchLerp: 0.08,
+        touchInertiaMultiplier: 24,
         wheelMultiplier: 1,
+        touchMultiplier: 1.5,
       });
       window.__lenis = lenis;
       lenis.on("scroll", ScrollTrigger.update);
