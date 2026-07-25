@@ -187,11 +187,9 @@ function main() {
               : "")
           : null;
       }
-      return {
-        shellTop, shellH, scrollTarget,
-        canvas: canvas ? canvas.width + "x" + canvas.height : "(none)",
-        coverEl,
-      };
+      return "top=" + shellTop + " h=" + shellH + " tgt=" + scrollTarget +
+             " canvas=" + (canvas ? canvas.width + "x" + canvas.height : "none") +
+             " cover=" + coverEl;
     }
 
     // Are pointermove events even reaching the page, and what's under the
@@ -223,19 +221,17 @@ function main() {
       const scrolledRecently = now - lastScrollT < 1100;
       if (scrolledRecently) {
         const L = window.__lenis;
-        log("sample", {
-          fps,
-          scrollEvents,
-          avgDeltaPx: scrollEvents ? +(sumDelta / scrollEvents).toFixed(1) : 0,
-          maxDeltaPx: maxDelta,
-          scrollY: Math.round(window.scrollY),
-          heroTop: heroTop(),
-          lenis: L ? { on: !L.isStopped, locked: !!L.isLocked, vel: +(Number(L.velocity) || 0).toFixed(1), anim: Math.round(Number(L.animatedScroll) || 0) } : "inactive",
-          paperActive,
-          experienceStarted: document.body.classList.contains("experience-started"),
-          castleScene: inspectIsland("castle-scene"),
-          bg3d: inspectIsland("bg-3d"),
-        });
+        const avg = scrollEvents ? +(sumDelta / scrollEvents).toFixed(1) : 0;
+        const lenisStr = L
+          ? (L.isStopped ? "STOPPED" : "on") + (L.isLocked ? "+LOCKED" : "")
+          : "inactive";
+        log(
+          "sample | fps=" + fps + " scrollY=" + Math.round(window.scrollY) +
+          " ev=" + scrollEvents + " avgD=" + avg + " maxD=" + maxDelta +
+          " | lenis=" + lenisStr + " paperActive=" + paperActive +
+          "\n   castle-scene: " + inspectIsland("castle-scene") +
+          "\n   bg-3d:        " + inspectIsland("bg-3d")
+        );
       }
       winStart = now; winFrames = frames; scrollEvents = 0; sumDelta = 0; maxDelta = 0;
     }, 1000);
