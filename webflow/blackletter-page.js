@@ -168,6 +168,11 @@ function main() {
                     island.shadowRoot.querySelector("div");
       const canvas = island.shadowRoot.querySelector("canvas");
       const vh = window.innerHeight || 1;
+      // Which element actually carries the section's real height? (shell = 0)
+      const islandH = Math.round(island.getBoundingClientRect().height);
+      const wrap = island.parentElement;
+      const wrapH = wrap ? Math.round(wrap.getBoundingClientRect().height) : null;
+      const canvasCssH = canvas ? Math.round(canvas.getBoundingClientRect().height) : null;
       let shellTop = null, shellH = null, scrollTarget = null, coverEl = null;
       if (shell) {
         const r = shell.getBoundingClientRect();
@@ -187,8 +192,9 @@ function main() {
               : "")
           : null;
       }
-      return "top=" + shellTop + " h=" + shellH + " tgt=" + scrollTarget +
-             " canvas=" + (canvas ? canvas.width + "x" + canvas.height : "none") +
+      return "shellTop=" + shellTop + " shellH=" + shellH + " tgt=" + scrollTarget +
+             " | islandH=" + islandH + " wrapH=" + wrapH + " canvasCssH=" + canvasCssH +
+             " canvasBuf=" + (canvas ? canvas.width + "x" + canvas.height : "none") +
              " cover=" + coverEl;
     }
 
