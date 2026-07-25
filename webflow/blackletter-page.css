@@ -5,6 +5,30 @@
    the shop/subscribe/footer embeds) lives here.
    ============================================================ */
 
+/* ---------- Lenis smooth scroll ----------
+   Base styles for the Lenis smooth-scroll instance set up in
+   blackletter-page.js. NOTE: the usual `.lenis-stopped { overflow: hidden }`
+   rule is intentionally omitted — the paper snap transitions and the footer
+   loop move the page with window.scrollTo while Lenis is paused, and
+   overflow:hidden would clip those programmatic scrolls. Lenis is paused
+   (not overflow-locked) during those, so the page stays scrollable to code. */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-smooth iframe {
+  pointer-events: none;
+}
+
 /* ---------- custom scrollbar: forged iron & parchment ----------
    Near-black track with a faint bone hairline, iron thumb edged in
    parchment, deep crimson on hover to match the buttons. Square

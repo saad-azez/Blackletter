@@ -24,6 +24,44 @@ function main() {
   gsap.registerPlugin(ScrollTrigger);
 
   /* ============================================================
+     1a-0. SMOOTH SCROLL (Lenis)
+     One continuous, eased scroll value for the whole page so the
+     scroll-driven 3D (the castle vortex) and every ScrollTrigger
+     reveal move on an interpolated scroll instead of the browser's
+     discrete wheel steps — that stepping is why the castle animation
+     reads smoothly on a trackpad locally but janky on a mouse wheel.
+
+     It is PAUSED the instant any paper curtain / section-snap covers
+     the screen (see the blackletter:paper-transition handler below),
+     so it never fights those components' programmatic window.scrollTo
+     glides. Wheel only — touch stays native so mobile and the paper
+     snap transitions keep their exact feel and low-power devices
+     aren't taxed. Fully disabled under prefers-reduced-motion.
+     ============================================================ */
+  let lenis = null;
+  (function initSmoothScroll() {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return;
+    // Loaded from the JS bundle (not the before-body snippet) so updating the
+    // scroll setup only needs a jsDelivr purge, never a Webflow paste.
+    import("https://cdn.jsdelivr.net/npm/lenis@1.1.20/+esm").then((mod) => {
+      const Lenis = mod && (mod.default || mod.Lenis);
+      if (typeof Lenis !== "function") return;
+      lenis = new Lenis({
+        duration: 1.15,
+        easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+        smoothWheel: true,
+        syncTouch: false,
+        wheelMultiplier: 1,
+      });
+      window.__lenis = lenis;
+      lenis.on("scroll", ScrollTrigger.update);
+      gsap.ticker.add((time) => { lenis.raf(time * 1000); });
+      gsap.ticker.lagSmoothing(0);
+    }).catch(() => { lenis = null; });
+  })();
+
+  /* ============================================================
      1a. SHARED UTILS — defined once, used by every section
      ============================================================ */
 
@@ -175,18 +213,31 @@ function main() {
     while (heldIntros.length) heldIntros.shift()();
   }
 
+  // Resume smooth scroll and snap Lenis's internal value to wherever the
+  // transition left the real scroll, so there's no post-curtain jump.
+  function resumeSmoothScroll() {
+    if (!lenis) return;
+    lenis.start();
+    lenis.scrollTo(window.scrollY, { immediate: true, force: true });
+  }
+
   window.addEventListener("blackletter:paper-transition", (event) => {
     const phase = event.detail && event.detail.phase;
     clearTimeout(paperFailsafeTimer);
     if (phase === "start") {
       paperTransitionActive = true;
+      // Pause Lenis so its animated scroll can't override the curtain's
+      // programmatic window.scrollTo while the screen is covered.
+      if (lenis) lenis.stop();
       // Never hold reveals hostage if an "end" gets lost somehow.
       paperFailsafeTimer = setTimeout(() => {
         paperTransitionActive = false;
+        resumeSmoothScroll();
         flushHeldIntros();
       }, 10000);
     } else {
       paperTransitionActive = false;
+      resumeSmoothScroll();
       flushHeldIntros();
     }
   });
