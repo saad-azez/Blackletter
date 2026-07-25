@@ -396,22 +396,35 @@ function main() {
     while (heldIntros.length) heldIntros.shift()();
   }
 
+  // Pause Lenis's wheel handling during a transition so user input can't fight
+  // the curtain, then resume and resync. This does NOT make the glide un-smooth:
+  // the transition still drives the cross-boundary scroll with
+  // lenis.scrollTo({ force: true }), and a forced scroll keeps animating while
+  // Lenis is paused (raf advances the tween regardless of isStopped). Pausing
+  // also protects against a version mismatch — if the old window.scrollTo
+  // transition component is still live, an un-paused Lenis would fight it and
+  // jam the scroll mid-page.
+  function resumeSmoothScroll() {
+    if (!lenis) return;
+    lenis.start();
+    lenis.scrollTo(window.scrollY, { immediate: true, force: true });
+  }
+
   window.addEventListener("blackletter:paper-transition", (event) => {
     const phase = event.detail && event.detail.phase;
     clearTimeout(paperFailsafeTimer);
     if (phase === "start") {
       paperTransitionActive = true;
-      // Lenis is intentionally NOT paused here: the transitions now drive the
-      // cross-boundary scroll through Lenis themselves (lenis.scrollTo), so the
-      // whole page turn stays one smooth, interpolated motion. Pausing it would
-      // freeze that glide.
-      // Never hold reveals hostage if an "end" gets lost somehow.
+      if (lenis) lenis.stop();
+      // Never hold reveals (or Lenis) hostage if an "end" gets lost somehow.
       paperFailsafeTimer = setTimeout(() => {
         paperTransitionActive = false;
+        resumeSmoothScroll();
         flushHeldIntros();
       }, 10000);
     } else {
       paperTransitionActive = false;
+      resumeSmoothScroll();
       flushHeldIntros();
     }
   });
