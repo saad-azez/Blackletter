@@ -110,6 +110,72 @@ function toText(value: unknown) {
   return '';
 }
 
+/**
+ * Candidate elements that might carry the section's true, scrollable height.
+ * Inside a Webflow code-island the component's own <section> (sectionRef) is
+ * rendered in a shadow root and often reports height 0 — so we also consider
+ * the shadow host (the <code-island> element) and its Webflow wrapper. Rendered
+ * normally (local dev, no shadow root) the list is just the element itself.
+ */
+function sectionHeightCandidates(element: HTMLElement): Element[] {
+  const candidates: Element[] = [element];
+  const root = element.getRootNode();
+
+  if (root instanceof ShadowRoot && root.host instanceof HTMLElement) {
+    candidates.push(root.host);
+
+    const wrapper = root.host.parentElement;
+
+    if (wrapper && wrapper !== document.body && wrapper !== document.documentElement) {
+      candidates.push(wrapper);
+    }
+  }
+
+  return candidates;
+}
+
+/**
+ * The section's scroll box: its top offset and its REAL height. A zero-height
+ * shell (the Webflow shadow-DOM case) would otherwise fall back to a single
+ * viewport, collapsing the scroll animation into the first screenful and
+ * freezing it for the rest of a taller section. Picking the tallest candidate
+ * box is self-correcting — it uses the element that actually has the height,
+ * whether that's the section itself (local) or the Webflow wrapper (embed).
+ */
+function resolveScrollBox(element: HTMLElement): { top: number; height: number } {
+  let best = element.getBoundingClientRect();
+
+  sectionHeightCandidates(element).forEach((candidate) => {
+    const rect = candidate.getBoundingClientRect();
+
+    if (rect.height > best.height) {
+      best = rect;
+    }
+  });
+
+  const viewportHeight = window.innerHeight || 1;
+
+  return { top: best.top, height: best.height >= 2 ? best.height : viewportHeight };
+}
+
+/** The element to hand the IntersectionObserver: the tallest candidate box, so
+    the scene sleeps/wakes on the real section, not a zero-height shell. */
+function resolveObserveTarget(element: HTMLElement): Element {
+  let target: Element = element;
+  let bestHeight = element.getBoundingClientRect().height;
+
+  sectionHeightCandidates(element).forEach((candidate) => {
+    const height = candidate.getBoundingClientRect().height;
+
+    if (height > bestHeight) {
+      bestHeight = height;
+      target = candidate;
+    }
+  });
+
+  return target;
+}
+
 function shapePointerAxis(value: number) {
   const clampedValue = THREE.MathUtils.clamp(value, -1, 1);
 
@@ -1087,12 +1153,13 @@ export function CastleScene({
     }
 
     const updateScroll = () => {
-      const rect = element.getBoundingClientRect();
+      // Measure the real section box (walks out to the Webflow wrapper when the
+      // component's own <section> is a zero-height shadow-DOM shell), so the
+      // animation spans the whole section instead of just the first viewport.
+      const { top, height } = resolveScrollBox(element);
       const viewportHeight = window.innerHeight || 1;
-      // Hidden Webflow wrappers report height 0; treat them as one viewport tall.
-      const height = rect.height >= 2 ? rect.height : viewportHeight;
-      const enter = THREE.MathUtils.clamp(rect.top / viewportHeight, 0, 1);
-      const exit = THREE.MathUtils.clamp(-rect.top / height, 0, 1);
+      const enter = THREE.MathUtils.clamp(top / viewportHeight, 0, 1);
+      const exit = THREE.MathUtils.clamp(-top / height, 0, 1);
 
       scrollTarget.current = exit - enter;
       invalidateRef.current();
@@ -1131,7 +1198,10 @@ export function CastleScene({
       { rootMargin: '200px' },
     );
 
-    observer.observe(element);
+    // Observe the real section box, not a zero-height shadow-DOM shell — a
+    // shell at the section's top leaves the viewport after one screenful and
+    // would otherwise sleep the scene mid-section.
+    observer.observe(resolveObserveTarget(element));
 
     return () => {
       observer.disconnect();
