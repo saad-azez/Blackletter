@@ -1281,11 +1281,28 @@ function main() {
       }
     }
 
-    // Run the check on the GSAP ticker, which fires AFTER Lenis's raf each
-    // frame (Lenis was added first) and BEFORE the browser paints — so if a
-    // fast scroll pushed the page a hair past a boundary, we snap it back the
-    // same frame and that overshoot is never painted.
-    gsap.ticker.add(check);
+    // Run the check off Lenis's OWN scroll event: it fires inside Lenis's rAF
+    // right after Lenis moves the page and before the browser paints — so a
+    // fast scroll past a boundary is caught and snapped back the same frame,
+    // never painted. (The GSAP-ticker approach ran before Lenis moved, because
+    // Lenis loads async and registers its ticker callback later.) Lenis loads
+    // asynchronously, so attach as soon as it's ready.
+    let checkAttached = false;
+    function attachCheck() {
+      if (checkAttached) return true;
+      if (lenis && typeof lenis.on === "function") {
+        lenis.on("scroll", check);
+        checkAttached = true;
+      }
+      return checkAttached;
+    }
+    if (!attachCheck()) {
+      const attachTimer = setInterval(() => {
+        if (attachCheck()) clearInterval(attachTimer);
+      }, 100);
+      // Fallback for the no-Lenis case (reduced motion / import blocked).
+      window.addEventListener("scroll", () => { if (!checkAttached) check(); }, { passive: true });
+    }
 
     // Swallow scroll input while the curtain covers.
     function block(event) {
