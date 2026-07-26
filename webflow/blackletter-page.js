@@ -1259,22 +1259,23 @@ function main() {
       const sectionEnd = (rj.bottom + y) - vh; // scroll where j's bottom hits the viewport bottom
       const sectionTop = rj.top + y;           // scroll where j's top hits the viewport top
 
-      // DOWN — heading past section j's end: curtain to j+1. restY clamps the
-      // leaving view to j's end so any overshoot into j+1 is snapped away.
-      if (j < sections.length - 1 && target > sectionEnd + INTENT_PX) {
+      // DOWN — the VISIBLE scroll has reached section j's end (so the whole of
+      // j has scrolled through) and we're still heading down. Fire exactly
+      // here; restY snaps to j's end so no overshoot into j+1 is ever painted.
+      if (j < sections.length - 1 && y >= sectionEnd && target > y + INTENT_PX) {
         const nextTop = sections[j + 1].getBoundingClientRect().top + y;
-        const restY = Math.max(0, Math.min(y, sectionEnd));
+        const restY = Math.max(0, sectionEnd);
         runSectionTransition(j, j + 1, "next", restY, Math.max(0, nextTop), downFlipOf(j));
         return;
       }
 
-      // UP — heading above section j's top: curtain back to j-1 (its end). The
-      // wipe uses the boundary's upper section (j-1), reversed. restY clamps the
-      // leaving view to j's top so any overshoot up into j-1 is snapped away.
-      if (j > 0 && target < sectionTop - INTENT_PX) {
+      // UP — the visible scroll has reached section j's top (all of j scrolled
+      // back through) and we're still heading up. Fire here; restY snaps to j's
+      // top so no overshoot up into j-1 is painted. Wipe uses j-1, reversed.
+      if (j > 0 && y <= sectionTop && target < y - INTENT_PX) {
         const prev = sections[j - 1].getBoundingClientRect();
         const prevEnd = (prev.bottom + y) - vh;
-        const restY = Math.max(y, sectionTop);
+        const restY = sectionTop;
         runSectionTransition(j, j - 1, "prev", restY, Math.max(0, prevEnd), !downFlipOf(j - 1));
         return;
       }
