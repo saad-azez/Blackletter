@@ -751,6 +751,11 @@ export function PaperScrollTransition({
       scrollRaf = null;
 
       if (destroyed || transitionCovering()) {
+        // Discard crossing history while any transition covers the screen, so
+        // the first scroll after landing re-initializes from the CURRENT
+        // position instead of comparing against a stale pre-transition one
+        // (which faked a boundary crossing and skipped the section).
+        haveLast = false;
         return;
       }
 
