@@ -216,6 +216,11 @@ export function PaperScrollTransition({
     let lastScrollY = window.scrollY;
     let lastTouchY: number | null = null;
     let pinnedScrollY = 0;
+    // Previous frame's section-bottom position, so we can detect the actual
+    // moment the boundary is CROSSED rather than firing on a lingering state
+    // (which would re-fire from anywhere past the section).
+    let lastBottom = 0;
+    let haveLast = false;
 
     // Drive scroll through the page's Lenis smooth-scroll instance when it
     // exists, so the whole transition (including the cross-boundary glide) is
@@ -457,46 +462,48 @@ export function PaperScrollTransition({
     // Without Lenis we fall back to predicting from the raw wheel/touch delta.
     // =====================================================================
 
-    // Lenis heading threshold: how firmly it must be moving in a direction
-    // (target leads the visible position) before we treat it as intent to cross.
-    const TARGET_TRIGGER_PX = 6;
     // Fire a hair before the edge exactly meets the viewport, so it triggers
     // right as the section ends rather than a frame or two after.
     const EDGE_LOOKAHEAD_FR = 0.06; // × viewport
-    // "Up" only arms near the boundary, not from deep inside the section.
-    const UP_ARM_FR = 0.25; // × viewport
+    // Tight tolerance around a boundary — small enough that it fires on time,
+    // wide enough that a normal scroll frame lands inside it.
+    const STATE_BAND_FR = 0.2; // × viewport
+    // "Up" only arms near the top boundary, not from deep inside the section.
+    const UP_ARM_FR = 0.35; // × viewport
 
-    const lenisBoundaryCheck = (rect: DOMRect, lenis: LenisLike) => {
-      if (performance.now() < transitionBus.cooldownUntil) {
+    // Direction and crossing are read from how the section's own bottom moved
+    // since last frame (lastBottom) — robust, and independent of Lenis internals.
+    const boundaryCheck = (rect: DOMRect) => {
+      if (!haveLast || performance.now() < transitionBus.cooldownUntil) {
         return;
       }
 
       const vh = window.innerHeight;
-      const scrollY = window.scrollY;
-      const target =
-        typeof lenis.targetScroll === 'number' ? lenis.targetScroll : scrollY;
       const edge = vh * EDGE_LOOKAHEAD_FR;
+      const band = vh * STATE_BAND_FR;
+      const goingDown = rect.bottom < lastBottom;
+      const goingUp = rect.bottom > lastBottom;
 
-      // DOWN — inside this section (its top at/above the viewport top) and its
-      // END has just reached the viewport bottom, with Lenis heading down. This
-      // is the moment the section finishes filling the screen: fire here so the
-      // curtain starts before the next section shows. A one-sided threshold
-      // (bottom <= viewport + edge) can't be stepped over by a fast frame.
+      // DOWN — scrolling down and the section's bottom just reached the viewport
+      // bottom (its end). Fire only when we CROSS that line this frame, or are
+      // sitting right at it — never from far past (which re-fired endlessly).
       if (
         rect.top <= 2 &&
+        goingDown &&
         rect.bottom <= vh + edge &&
-        target > scrollY + TARGET_TRIGGER_PX
+        (lastBottom > vh + edge || rect.bottom >= vh - band)
       ) {
         runTransition('next');
         return;
       }
 
-      // UP — heading back up and this section's end has reached the viewport
+      // UP — scrolling up and the section's bottom just reached the viewport
       // top, caught only near that boundary (not from deep inside the section).
       if (
+        goingUp &&
         rect.bottom >= -edge &&
         rect.bottom <= vh * UP_ARM_FR &&
-        target < scrollY - TARGET_TRIGGER_PX
+        (lastBottom < -edge || rect.bottom <= band)
       ) {
         runTransition('previous');
       }
@@ -695,7 +702,9 @@ export function PaperScrollTransition({
       const lenis = getLenis();
 
       if (lenis) {
-        lenisBoundaryCheck(rect, lenis);
+        boundaryCheck(rect);
+        lastBottom = rect.bottom;
+        haveLast = true;
         return;
       }
 
