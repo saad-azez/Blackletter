@@ -1319,6 +1319,212 @@ function main() {
   }
 
   /* ============================================================
+     1f. SECTION TRANSITIONS (page-JS, attribute-driven)
+     The paper curtain between sections, run from here instead of a
+     Webflow code component — so it reads REAL section heights (no
+     zero-height shadow shell), talks to Lenis directly, and shares a
+     single WebGL curtain. Mark each snap section in Webflow with the
+     custom attribute  data-paper-transition  (value optional:
+     "top to bottom" flips the wipe). Consecutive marked sections get a
+     curtain between them; the footer loop still handles the page end.
+     ============================================================ */
+
+  function initSectionTransitions() {
+    const sections = Array.prototype.slice.call(
+      document.querySelectorAll("[data-paper-transition]")
+    );
+    if (sections.length < 2) {
+      console.log("[SectionTx] need >= 2 [data-paper-transition] sections; found", sections.length);
+      return;
+    }
+    sections.forEach((s, i) =>
+      console.log("[SectionTx] section", i, "=", s.className || s.tagName,
+        "h=" + Math.round(s.getBoundingClientRect().height))
+    );
+
+    const paperColor = getCSSColor("--paper-color-one", "#1d1d1b");
+    const COVER = 0.9, GLIDE = 0.32, REVEAL = 1.3, COOLDOWN_MS = 500;
+    const EDGE_FR = 0.06, BAND_FR = 0.2, UP_ARM_FR = 0.35;
+
+    let canvas = null, effect = null, running = false, cooldownUntil = 0;
+    const lastBottom = new Array(sections.length).fill(0);
+    const haveLast = new Array(sections.length).fill(false);
+
+    function ensureEffect() {
+      if (effect) return true;
+      try {
+        canvas = document.createElement("canvas");
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        canvas.style.cssText =
+          "position:fixed;top:0;left:0;width:100vw;height:100vh;opacity:0;pointer-events:none;z-index:10000;";
+        if (window.CSS && CSS.supports && CSS.supports("height", "100dvh")) {
+          canvas.style.height = "100dvh";
+        }
+        document.body.appendChild(canvas);
+        effect = new PaperCurtainEffect(canvas, {
+          color: paperColor,
+          backgroundOpacity: 0,
+          style: "classic",
+          showLoader: false,
+          horizontal: false,
+          amplitude: 0.25,
+          rippedFrequency: 3.5,
+          rippedAmplitude: 0.05,
+          curveFrequency: 1,
+          curveAmplitude: 0.6,
+          rippedDelta: 1,
+          rippedHeight: 0.07,
+          grainOpacity: 1.0,
+          warmTint: 0.6,
+          manageContainerBackground: false,
+          registerGlobal: false,
+        });
+        return true;
+      } catch (e) {
+        console.warn("[SectionTx] curtain init failed", e);
+        effect = null;
+        return false;
+      }
+    }
+
+    window.addEventListener("resize", () => {
+      if (effect && canvas) {
+        effect.canvasSize = { width: window.innerWidth, height: window.innerHeight };
+        try { effect._resize(); } catch (e) {}
+      }
+    });
+
+    function emit(phase, towards) {
+      window.dispatchEvent(new CustomEvent("blackletter:paper-transition", {
+        detail: { phase: phase, towards: towards, source: "section" },
+      }));
+    }
+
+    function setScroll(y) {
+      if (lenis) lenis.scrollTo(y, { immediate: true, force: true });
+      else window.scrollTo(0, y);
+    }
+
+    function runSectionTransition(fromIdx, toIdx, towards, targetY) {
+      if (running || !ensureEffect()) return;
+      running = true;
+
+      const attr = (sections[fromIdx].getAttribute("data-paper-transition") || "").toLowerCase();
+      const downFlip = attr.indexOf("top") === 0 ? false : true;
+      const coverFlip = towards === "next" ? downFlip : !downFlip;
+
+      console.log("[SectionTx] >>> FIRE", towards, "from", fromIdx, "->", toIdx,
+        "scrollY=" + Math.round(window.scrollY), "targetY=" + Math.round(targetY));
+
+      emit("start", towards);
+      effect.setAxisFlip(coverFlip);
+      effect.state.progress = 0;
+      canvas.style.opacity = "1";
+
+      const proxy = { y: window.scrollY };
+      const tl = gsap.timeline({
+        onComplete: () => {
+          canvas.style.opacity = "0";
+          running = false;
+          cooldownUntil = performance.now() + COOLDOWN_MS;
+          for (let i = 0; i < haveLast.length; i++) haveLast[i] = false;
+          emit("end", towards);
+        },
+      });
+      tl.to(effect.state, { progress: 1, duration: COVER, ease: "power2.inOut" }, 0);
+      tl.to(proxy, {
+        y: targetY,
+        duration: GLIDE,
+        ease: "power2.inOut",
+        onUpdate: () => setScroll(Math.round(proxy.y)),
+      }, COVER);
+      tl.add(() => effect.setAxisFlip(!coverFlip), COVER + GLIDE);
+      tl.to(effect.state, { progress: 0, duration: REVEAL, ease: "power2.inOut" }, COVER + GLIDE);
+    }
+
+    let lastLog = 0;
+    function check() {
+      if (running || paperTransitionActive || performance.now() < cooldownUntil || !lenis) return;
+
+      const vh = window.innerHeight;
+      const y = window.scrollY;
+      const target = typeof lenis.targetScroll === "number" ? lenis.targetScroll : y;
+      const edge = vh * EDGE_FR, band = vh * BAND_FR;
+
+      for (let i = 0; i < sections.length; i++) {
+        const r = sections[i].getBoundingClientRect();
+        if (r.height < 2) { haveLast[i] = false; continue; }
+        if (!haveLast[i]) { lastBottom[i] = r.bottom; haveLast[i] = true; continue; }
+
+        const goingDown = r.bottom < lastBottom[i];
+        const goingUp = r.bottom > lastBottom[i];
+
+        // DOWN — reached this section's end; curtain to the next section.
+        if (
+          i < sections.length - 1 &&
+          r.top <= 2 &&
+          goingDown &&
+          r.bottom <= vh + edge &&
+          (lastBottom[i] > vh + edge || r.bottom >= vh - band)
+        ) {
+          const nextTop = sections[i + 1].getBoundingClientRect().top + y;
+          lastBottom[i] = r.bottom;
+          runSectionTransition(i, i + 1, "next", Math.max(0, nextTop));
+          return;
+        }
+
+        // UP — heading back up over this section's end; curtain to it.
+        if (
+          i > 0 &&
+          goingUp &&
+          r.bottom >= -edge &&
+          r.bottom <= vh * UP_ARM_FR &&
+          (lastBottom[i] < -edge || r.bottom <= band)
+        ) {
+          const prevBottom = sections[i - 1].getBoundingClientRect().bottom + y;
+          lastBottom[i] = r.bottom;
+          runSectionTransition(i, i - 1, "prev", Math.max(0, prevBottom - vh));
+          return;
+        }
+
+        // Debug: heading down near this section's end.
+        if (goingDown && r.top <= vh && r.bottom <= vh * 1.6 && r.bottom >= vh - band - 4) {
+          const now = performance.now();
+          if (now - lastLog > 180) {
+            lastLog = now;
+            console.log("[SectionTx] approach↓ section", i,
+              "{ top:", Math.round(r.top), ", bottom:", Math.round(r.bottom),
+              ", lastBottom:", Math.round(lastBottom[i]), ", vh:", vh, ", target:", Math.round(target), "}");
+          }
+        }
+
+        lastBottom[i] = r.bottom;
+      }
+    }
+
+    let scheduled = false;
+    function schedule() {
+      if (!scheduled) {
+        scheduled = true;
+        requestAnimationFrame(() => { scheduled = false; check(); });
+      }
+    }
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule, { passive: true });
+
+    // Swallow scroll input while the curtain covers.
+    function block(event) {
+      if (running) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }
+    window.addEventListener("wheel", block, { passive: false, capture: true });
+    window.addEventListener("touchmove", block, { passive: false, capture: true });
+  }
+
+  /* ============================================================
      BOOT — modules run after DOM parse; wire global refresh once
      ============================================================ */
 
@@ -1327,6 +1533,7 @@ function main() {
   initBattleSection();
   initShopSection();
   initFooterLoop();
+  initSectionTransitions();
 
   function onPageSettled() {
     ScrollTrigger.refresh();
