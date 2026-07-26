@@ -1121,7 +1121,10 @@ function main() {
 
     const paperColor = getCSSColor("--paper-color-one", "#1d1d1b");
     const COVER = 0.9, GLIDE = 0.32, REVEAL = 1.3, COOLDOWN_MS = 500;
-    const EDGE_FR = 0.06, BAND_FR = 0.2, UP_ARM_FR = 0.35;
+    // EDGE = lookahead so the curtain starts just BEFORE the next section
+    // shows; BAND = "were we near this section's end last frame?" tolerance,
+    // wide enough that an aggressive scroll frame can't jump the trigger.
+    const EDGE_FR = 0.08, BAND_FR = 0.25;
 
     let canvas = null, effect = null, running = false, cooldownUntil = 0;
     const lastBottom = new Array(sections.length).fill(0);
@@ -1242,12 +1245,14 @@ function main() {
         const attr = (sections[i].getAttribute("data-paper-transition") || "").toLowerCase();
         const downFlip = attr.indexOf("top") === 0 ? false : true;
 
-        // DOWN — section i's end reached the viewport bottom: curtain to i+1.
+        // DOWN — section i's bottom is crossing the viewport bottom (its end),
+        // and we were at/near that end last frame. Fires from the boundary even
+        // after landing there, and can't be jumped by a fast frame.
         if (
           r.top <= 2 &&
           goingDown &&
-          r.bottom <= vh + edge &&
-          (lastBottom[i] > vh + edge || r.bottom >= vh - band)
+          lastBottom[i] >= vh - band &&
+          r.bottom <= vh + edge
         ) {
           const nextTop = sections[i + 1].getBoundingClientRect().top + y;
           lastBottom[i] = r.bottom;
@@ -1255,13 +1260,12 @@ function main() {
           return;
         }
 
-        // UP — section i's end dropped back across the viewport top: curtain
-        // back onto section i (landing at its end), wipe reversed.
+        // UP — section i's bottom is crossing the viewport top going up (back
+        // into i from i+1); land at section i's end, wipe reversed.
         if (
           goingUp &&
-          r.bottom >= -band &&
-          r.bottom <= vh * UP_ARM_FR &&
-          (lastBottom[i] < -edge || r.bottom <= band)
+          lastBottom[i] <= band &&
+          r.bottom >= -edge
         ) {
           const iBottom = r.bottom + y;
           lastBottom[i] = r.bottom;
