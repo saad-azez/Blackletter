@@ -459,29 +459,34 @@ export function PaperScrollTransition({
 
     const TARGET_TRIGGER_PX = 6;
 
-    // How close (past the section top) the lead must be before we start
-    // watching for a downward crossing — one viewport, so a hard fling is
-    // caught as it nears the end but the section still scrolls normally.
-    const APPROACH_BAND = () => window.innerHeight;
+    // The detection window must be far wider than a single scroll frame's jump,
+    // or Lenis steps clean over it and the transition never fires. We arm the
+    // check across a generous band around the boundary and decide direction
+    // from where Lenis is HEADING (targetScroll), not the exact rect position.
+    //   APPROACH_BAND_FR — how far before the boundary the check arms.
+    //   CATCH_BEHIND_FR  — how far past it we still catch (safety for overshoot).
+    const APPROACH_BAND_FR = 0.5; // × viewport
+    const CATCH_BEHIND_FR = 0.5; // × viewport
 
     const lenisBoundaryCheck = (rect: DOMRect, lenis: LenisLike) => {
       if (performance.now() < transitionBus.cooldownUntil) {
         return;
       }
 
-      const viewportHeight = window.innerHeight;
+      const vh = window.innerHeight;
       const scrollY = window.scrollY;
       const target =
         typeof lenis.targetScroll === 'number' ? lenis.targetScroll : scrollY;
 
-      // Down: inside this section, its end within reach below the viewport
-      // bottom, and Lenis heading past where the section ends.
+      // DOWN — we're inside this section (its top at/above the viewport top),
+      // its end within a band of the viewport bottom, and Lenis heading past
+      // where the section ends.
       if (
         rect.top <= 2 &&
-        rect.bottom >= viewportHeight - 2 &&
-        rect.bottom <= viewportHeight + APPROACH_BAND()
+        rect.bottom >= vh * (1 - CATCH_BEHIND_FR) &&
+        rect.bottom <= vh * (1 + APPROACH_BAND_FR)
       ) {
-        const boundaryY = scrollY + (rect.bottom - viewportHeight);
+        const boundaryY = scrollY + (rect.bottom - vh);
 
         if (target > boundaryY + TARGET_TRIGGER_PX) {
           runTransition('next');
@@ -489,9 +494,12 @@ export function PaperScrollTransition({
         }
       }
 
-      // Up: the following section's top is in view and Lenis is heading back up
-      // across this section's end.
-      if (rect.bottom >= -2 && rect.bottom <= CAPTURE_WINDOW_PX) {
+      // UP — this section's end sits near the viewport top and Lenis is heading
+      // back up across it.
+      if (
+        rect.bottom >= vh * -CATCH_BEHIND_FR &&
+        rect.bottom <= vh * APPROACH_BAND_FR
+      ) {
         const boundaryY = scrollY + rect.bottom;
 
         if (target < boundaryY - TARGET_TRIGGER_PX) {
