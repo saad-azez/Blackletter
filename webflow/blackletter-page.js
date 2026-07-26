@@ -1121,9 +1121,6 @@ function main() {
 
     const paperColor = getCSSColor("--paper-color-one", "#1d1d1b");
     const COVER = 0.9, GLIDE = 0.32, REVEAL = 1.3, COOLDOWN_MS = 500;
-    // How firmly Lenis must be heading past a boundary before we treat it as
-    // intent to cross (px of lead over the current scroll).
-    const INTENT_PX = 4;
 
     let canvas = null, effect = null, running = false, cooldownUntil = 0;
 
@@ -1205,6 +1202,10 @@ function main() {
           canvas.style.opacity = "0";
           running = false;
           cooldownUntil = performance.now() + COOLDOWN_MS;
+          // Re-baseline the position history to where we landed, so the glide
+          // isn't read as a zone jump on the next frame.
+          lastY = window.scrollY;
+          haveLastY = true;
           emit("end", towards);
         },
       });
@@ -1225,58 +1226,71 @@ function main() {
       return attr.indexOf("top") !== 0;
     }
 
-    // The section currently filling the viewport = the one containing the
-    // viewport's vertical midpoint. Re-derived every check so it's always
-    // correct (no state to drift), and it self-heals after any manual jump.
-    function activeIndex(y, vh) {
-      const mid = y + vh * 0.5;
-      let best = 0, bestDist = Infinity;
-      for (let j = 0; j < sections.length; j++) {
-        const r = sections[j].getBoundingClientRect();
-        if (r.height < 2) continue;
-        const top = r.top + y, bot = r.bottom + y;
-        if (mid >= top && mid < bot) return j;
-        const dist = Math.min(Math.abs(mid - top), Math.abs(mid - bot));
-        if (dist < bestDist) { bestDist = dist; best = j; }
-      }
-      return best;
-    }
+    /* ---------------------------------------------------------------
+       FORBIDDEN-ZONE MODEL
+
+       Two adjacent sections share one edge. Let B = that edge's scroll
+       position (section k's bottom). Then:
+
+         y = B - vh  -> section k exactly fills the viewport (its end)
+         y = B       -> section k+1 exactly fills the viewport (its top)
+
+       Every scroll position BETWEEN those two shows BOTH sections at
+       once — that band is the forbidden zone, and it is the only place
+       the "next section is visible" artefact can come from. So we never
+       let a frame paint inside it: the moment the scroll enters (or
+       jumps across) the zone we clamp back to the edge we came from and
+       run the curtain, which glides to the far edge while covered.
+
+       No "active section" guessing — that was the bug: halfway through
+       the zone the midpoint heuristic flipped which section it thought
+       we were in, so the up/down tests disagreed and it fired late or
+       not at all.
+       --------------------------------------------------------------- */
+    let lastY = window.scrollY;
+    let haveLastY = false;
 
     function check() {
-      if (running || paperTransitionActive || performance.now() < cooldownUntil || !lenis) return;
+      if (running || paperTransitionActive || !lenis) return;
 
       const vh = window.innerHeight;
       const y = window.scrollY;
-      const target = typeof lenis.targetScroll === "number" ? lenis.targetScroll : y;
+      const prevY = haveLastY ? lastY : y;
+      lastY = y;
+      haveLastY = true;
 
-      // Fire on INTENT: as soon as Lenis is heading past the current section's
-      // boundary — while that section still fills the screen — so the curtain
-      // covers before any neighbour peeks in, both directions.
-      const j = activeIndex(y, vh);
-      const rj = sections[j].getBoundingClientRect();
-      if (rj.height < 2) return;
+      if (performance.now() < cooldownUntil) return;
 
-      const sectionEnd = (rj.bottom + y) - vh; // scroll where j's bottom hits the viewport bottom
-      const sectionTop = rj.top + y;           // scroll where j's top hits the viewport top
+      for (let k = 0; k < sections.length - 1; k++) {
+        const rk = sections[k].getBoundingClientRect();
+        const rn = sections[k + 1].getBoundingClientRect();
+        if (rk.height < 2 || rn.height < 2) continue;
 
-      // DOWN — the VISIBLE scroll has reached section j's end (so the whole of
-      // j has scrolled through) and we're still heading down. Fire exactly
-      // here; restY snaps to j's end so no overshoot into j+1 is ever painted.
-      if (j < sections.length - 1 && y >= sectionEnd && target > y + INTENT_PX) {
-        const nextTop = sections[j + 1].getBoundingClientRect().top + y;
-        const restY = Math.max(0, sectionEnd);
-        runSectionTransition(j, j + 1, "next", restY, Math.max(0, nextTop), downFlipOf(j));
-        return;
-      }
+        const edge = rk.bottom + y;   // absolute scroll of the shared edge
+        const downEdge = edge - vh;   // section k fills the viewport (its end)
+        const upEdge = edge;          // section k+1 fills the viewport (its top)
+        if (downEdge >= upEdge) continue; // degenerate (section shorter than vh)
 
-      // UP — the visible scroll has reached section j's top (all of j scrolled
-      // back through) and we're still heading up. Fire here; restY snaps to j's
-      // top so no overshoot up into j-1 is painted. Wipe uses j-1, reversed.
-      if (j > 0 && y <= sectionTop && target < y - INTENT_PX) {
-        const prev = sections[j - 1].getBoundingClientRect();
-        const prevEnd = (prev.bottom + y) - vh;
-        const restY = sectionTop;
-        runSectionTransition(j, j - 1, "prev", restY, Math.max(0, prevEnd), !downFlipOf(j - 1));
+        const inZone = y > downEdge && y < upEdge;
+        const jumpedDown = prevY <= downEdge && y >= upEdge; // flung clean over
+        const jumpedUp = prevY >= upEdge && y <= downEdge;
+
+        if (!inZone && !jumpedDown && !jumpedUp) continue;
+
+        // Direction: how we entered. Prefer the frame delta; fall back to
+        // where Lenis is heading when the delta is zero.
+        const target = typeof lenis.targetScroll === "number" ? lenis.targetScroll : y;
+        const goingDown = y !== prevY ? y > prevY : target > y;
+
+        if (goingDown) {
+          // Snap back so section k fully fills the screen, then glide to k+1.
+          lastY = downEdge;
+          runSectionTransition(k, k + 1, "next", downEdge, upEdge, downFlipOf(k));
+        } else {
+          // Snap forward so section k+1 fully fills the screen, then glide back.
+          lastY = upEdge;
+          runSectionTransition(k + 1, k, "prev", upEdge, downEdge, !downFlipOf(k));
+        }
         return;
       }
     }
