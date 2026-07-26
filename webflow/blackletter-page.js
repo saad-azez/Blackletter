@@ -67,229 +67,6 @@ function main() {
     }).catch(() => { lenis = null; });
   })();
 
-  /* ============================================================
-     SCROLL DIAGNOSTICS (TEMPORARY — remove once resolved)
-     Logs why the scroll feels the way it does. Prints a compact
-     [scroll-debug] "sample" line once per second WHILE scrolling:
-
-       fps         — frame rate that second. <~45 while scrolling =
-                     the jank is heavy 3D dropping frames, NOT the
-                     scroll library (Lenis can't fix a slow paint).
-       scrollEvents/avgDeltaPx/maxDeltaPx — cadence. Small deltas
-                     (~2-10px) over many events = smooth/interpolated.
-                     Big deltas (~30-120px) over few events = stepped
-                     wheel scroll (Lenis not smoothing this stretch).
-       lenis       — "inactive" means it never loaded (import blocked /
-                     reduced-motion). on:false means it loaded but is
-                     PAUSED (a paper transition is holding it).
-       paperActive — true means a curtain/snap is covering, so Lenis is
-                     intentionally paused; if this is true during the
-                     jank, the castle is animating inside a snap glide.
-       heroTop     — the castle section's rect.top; watch it move.
-
-     Disable by setting window.__BLACKLETTER_SCROLL_DEBUG__ = false.
-     ============================================================ */
-  (function scrollDebug() {
-    if (window.__BLACKLETTER_SCROLL_DEBUG__ === false) return;
-    const TAG = "[scroll-debug]";
-    const log = (...a) => console.log(TAG, ...a);
-
-    log("boot", {
-      reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-      hasGSAP: !!window.gsap,
-      hasScrollTrigger: !!window.ScrollTrigger,
-      dpr: window.devicePixelRatio,
-      viewport: window.innerWidth + "x" + window.innerHeight,
-      ua: navigator.userAgent,
-    });
-
-    // Did Lenis actually load? (it imports asynchronously)
-    setTimeout(() => {
-      const L = window.__lenis;
-      if (L) log("lenis ACTIVE", { isStopped: !!L.isStopped, duration: L.options && L.options.duration });
-      else log("lenis NOT active — import blocked, reduced-motion, or disabled");
-    }, 2500);
-
-    // One-time inventory of the 3D islands and whether they've mounted.
-    setTimeout(() => {
-      const islands = Array.prototype.map.call(
-        document.querySelectorAll("code-island"),
-        (el, i) => ({
-          i,
-          host: (el.parentElement && el.parentElement.className) || "?",
-          hasShadow: !!el.shadowRoot,
-          hasCanvas: !!(el.shadowRoot && el.shadowRoot.querySelector("canvas")),
-        })
-      );
-      log("code-islands", islands.length ? islands : "(none found)");
-    }, 1800);
-
-    // Paper transitions pause Lenis; log each so we can see if they fire
-    // constantly (which would keep scroll un-smoothed).
-    let paperActive = false;
-    window.addEventListener("blackletter:paper-transition", (e) => {
-      const d = e.detail || {};
-      paperActive = d.phase === "start";
-      log("paper-transition", d.phase, "towards:", d.towards);
-    });
-
-    // Cheap continuous frame counter for FPS.
-    let frames = 0;
-    (function raf() { frames++; requestAnimationFrame(raf); })();
-
-    // Scroll cadence accumulators.
-    let scrollEvents = 0, sumDelta = 0, maxDelta = 0, lastY = window.scrollY, lastScrollT = 0;
-    window.addEventListener("scroll", () => {
-      const y = window.scrollY;
-      const dy = Math.abs(y - lastY);
-      lastY = y; scrollEvents++; sumDelta += dy; if (dy > maxDelta) maxDelta = dy;
-      lastScrollT = performance.now();
-    }, { passive: true });
-
-    function heroTop() {
-      const el = document.querySelector(".bg-3d") ||
-                 document.querySelector(".hero-section") ||
-                 document.querySelector("code-island");
-      return el ? Math.round(el.getBoundingClientRect().top) : null;
-    }
-
-    // Reach into a castle code-island (open shadow root) and report the exact
-    // inputs its scroll/pointer animation depends on:
-    //   shellTop/shellH — the section rect it reads; if this STOPS changing
-    //     while you keep scrolling, the scroll input froze (that's the "stops
-    //     in the middle"). scrollTarget is the -1..+1 value it derives from it.
-    //   canvas — the live WebGL canvas size (0 = not rendering).
-    //   coverEl — what element is on top at the island's centre. If this is
-    //     NOT the island/canvas, something is covering it and swallowing the
-    //     pointermove events (that's "mouse move does nothing").
-    // Compact "tag.firstclass" for whatever sits on top at a viewport point.
-    function topElAt(x, y) {
-      const el = document.elementFromPoint(x, y);
-      if (!el) return "null";
-      const cls = typeof el.className === "string" && el.className.trim()
-        ? "." + el.className.trim().split(/\s+/)[0]
-        : (el.id ? "#" + el.id : "");
-      return el.tagName.toLowerCase() + cls;
-    }
-
-    function inspectIsland(hostClass) {
-      const island = Array.prototype.find.call(
-        document.querySelectorAll("code-island"),
-        (el) => el.parentElement && el.parentElement.classList &&
-                el.parentElement.classList.contains(hostClass)
-      );
-      if (!island || !island.shadowRoot) return "(no island)";
-
-      const canvas = island.shadowRoot.querySelector("canvas");
-      const vh = window.innerHeight || 1;
-      const iw = window.innerWidth || 1;
-
-      // The tallest of shell / island host / Webflow wrapper = the real
-      // scroll box (mirrors the CastleScene fix). Report which one it is and
-      // the scroll target it yields.
-      const shell = island.shadowRoot.querySelector(".castle-scene-shell") ||
-                    island.shadowRoot.querySelector("section");
-      const boxes = [["shell", shell], ["island", island], ["wrap", island.parentElement]];
-      let bestName = "none", bestRect = null, bestH = -1;
-      boxes.forEach(([name, el]) => {
-        if (!el) return;
-        const r = el.getBoundingClientRect();
-        if (r.height > bestH) { bestH = r.height; bestRect = r; bestName = name; }
-      });
-      let tgt = null, boxTop = null;
-      if (bestRect) {
-        boxTop = Math.round(bestRect.top);
-        const h = bestRect.height >= 2 ? bestRect.height : vh;
-        const enter = Math.min(Math.max(bestRect.top / vh, 0), 1);
-        const exit = Math.min(Math.max(-bestRect.top / h, 0), 1);
-        tgt = +(exit - enter).toFixed(3);
-      }
-
-      const heights = "H{shell=" + (shell ? Math.round(shell.getBoundingClientRect().height) : "-") +
-        " island=" + Math.round(island.getBoundingClientRect().height) +
-        " wrap=" + (island.parentElement ? Math.round(island.parentElement.getBoundingClientRect().height) : "-") + "}";
-
-      // Canvas geometry + how it's positioned/stacked, and — the key check —
-      // what element is actually on top at 20/50/80% down the CANVAS. If those
-      // are not the code-island/canvas, something is covering the castle.
-      let canvasInfo = "canvas=none", stack = "";
-      if (canvas) {
-        const cr = canvas.getBoundingClientRect();
-        const cs = getComputedStyle(canvas);
-        canvasInfo = "canvas[top=" + Math.round(cr.top) + " bot=" + Math.round(cr.bottom) +
-          " h=" + Math.round(cr.height) + " pos=" + cs.position + " z=" + cs.zIndex +
-          " vis=" + cs.visibility + " op=" + cs.opacity + "]";
-        const cx = Math.min(Math.max(cr.left + cr.width / 2, 1), iw - 1);
-        stack = [0.2, 0.5, 0.8].map((f) => {
-          const y = Math.min(Math.max(cr.top + cr.height * f, 1), vh - 1);
-          return (f * 100) + "%=" + topElAt(cx, y);
-        }).join(" ");
-      }
-
-      // Version marker + REAL scroll target the deployed component computes.
-      // fix=OLD → the Castle Scene component update is not published yet.
-      const fix = island.getAttribute("data-castle-fix") || "OLD(not-published)";
-      const actualTgt = island.getAttribute("data-scroll-tgt");
-      // Render-loop signals: does the scene keep DRAWING as you scroll?
-      // frames should keep climbing; frameloop should stay "demand"; smooth is
-      // the actual damped value driving the pitch.
-      const frames = island.getAttribute("data-frames");
-      const frameloop = island.getAttribute("data-frameloop");
-      const smooth = island.getAttribute("data-scroll-smooth");
-
-      return "fix=" + fix + " frameloop=" + frameloop + " frames=" + frames +
-             " smooth=" + smooth + " actualTgt=" + actualTgt +
-             " | debugTgt=" + tgt + " box=" + bestName + " " + heights +
-             " " + canvasInfo + " TOP{" + stack + "}";
-    }
-
-    // Are pointermove events even reaching the page, and what's under the
-    // cursor? If coverEl is an overlay, the castle never sees the pointer.
-    let ptrCount = 0, lastPtrLog = 0;
-    window.addEventListener("pointermove", (e) => {
-      ptrCount++;
-      const now = performance.now();
-      if (now - lastPtrLog < 900) return;
-      lastPtrLog = now;
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      log("pointermove", {
-        count: ptrCount,
-        at: Math.round(e.clientX) + "," + Math.round(e.clientY),
-        under: el
-          ? el.tagName.toLowerCase() +
-            (typeof el.className === "string" && el.className.trim()
-              ? "." + el.className.trim().split(/\s+/).join(".")
-              : "")
-          : null,
-      });
-    }, { passive: true });
-
-    let winStart = performance.now(), winFrames = 0;
-    const intervalId = setInterval(() => {
-      const now = performance.now();
-      const secs = (now - winStart) / 1000 || 1;
-      const fps = Math.round((frames - winFrames) / secs);
-      const scrolledRecently = now - lastScrollT < 1100;
-      if (scrolledRecently) {
-        const L = window.__lenis;
-        const avg = scrollEvents ? +(sumDelta / scrollEvents).toFixed(1) : 0;
-        const lenisStr = L
-          ? (L.isStopped ? "STOPPED" : "on") + (L.isLocked ? "+LOCKED" : "")
-          : "inactive";
-        log(
-          "sample | fps=" + fps + " scrollY=" + Math.round(window.scrollY) +
-          " ev=" + scrollEvents + " avgD=" + avg + " maxD=" + maxDelta +
-          " | lenis=" + lenisStr + " paperActive=" + paperActive +
-          "\n   castle-scene: " + inspectIsland("castle-scene") +
-          "\n   bg-3d:        " + inspectIsland("bg-3d")
-        );
-      }
-      winStart = now; winFrames = frames; scrollEvents = 0; sumDelta = 0; maxDelta = 0;
-    }, 1000);
-    window.__scrollDebugStop = () => { clearInterval(intervalId); log("stopped"); };
-
-    log("ready — scroll the page; one 'sample' line prints per second while scrolling");
-  })();
 
   /* ============================================================
      1a. SHARED UTILS — defined once, used by every section
@@ -1406,16 +1183,13 @@ function main() {
       else window.scrollTo(0, y);
     }
 
-    function runSectionTransition(fromIdx, toIdx, towards, targetY) {
+    function runSectionTransition(fromIdx, toIdx, towards, targetY, coverFlip) {
       if (running || !ensureEffect()) return;
       running = true;
 
-      const attr = (sections[fromIdx].getAttribute("data-paper-transition") || "").toLowerCase();
-      const downFlip = attr.indexOf("top") === 0 ? false : true;
-      const coverFlip = towards === "next" ? downFlip : !downFlip;
-
       console.log("[SectionTx] >>> FIRE", towards, "from", fromIdx, "->", toIdx,
-        "scrollY=" + Math.round(window.scrollY), "targetY=" + Math.round(targetY));
+        "scrollY=" + Math.round(window.scrollY), "targetY=" + Math.round(targetY),
+        "flip=" + coverFlip);
 
       emit("start", towards);
       effect.setAxisFlip(coverFlip);
@@ -1443,16 +1217,20 @@ function main() {
       tl.to(effect.state, { progress: 0, duration: REVEAL, ease: "power2.inOut" }, COVER + GLIDE);
     }
 
-    let lastLog = 0;
     function check() {
       if (running || paperTransitionActive || performance.now() < cooldownUntil || !lenis) return;
 
       const vh = window.innerHeight;
       const y = window.scrollY;
-      const target = typeof lenis.targetScroll === "number" ? lenis.targetScroll : y;
       const edge = vh * EDGE_FR, band = vh * BAND_FR;
 
-      for (let i = 0; i < sections.length; i++) {
+      // Each boundary is section i's BOTTOM, shared with section i+1. Both
+      // directions of that one boundary are handled here on section i:
+      //   scrolling down across it  -> curtain to i+1
+      //   scrolling up   across it  -> curtain back onto i (at its end)
+      // The wipe direction comes from section i's attribute and is reversed on
+      // the way up, so a boundary always plays the same, mirrored either way.
+      for (let i = 0; i < sections.length - 1; i++) {
         const r = sections[i].getBoundingClientRect();
         if (r.height < 2) { haveLast[i] = false; continue; }
         if (!haveLast[i]) { lastBottom[i] = r.bottom; haveLast[i] = true; continue; }
@@ -1460,9 +1238,12 @@ function main() {
         const goingDown = r.bottom < lastBottom[i];
         const goingUp = r.bottom > lastBottom[i];
 
-        // DOWN — reached this section's end; curtain to the next section.
+        // "bottom to top" (default) -> downFlip true; "top to bottom" -> false.
+        const attr = (sections[i].getAttribute("data-paper-transition") || "").toLowerCase();
+        const downFlip = attr.indexOf("top") === 0 ? false : true;
+
+        // DOWN — section i's end reached the viewport bottom: curtain to i+1.
         if (
-          i < sections.length - 1 &&
           r.top <= 2 &&
           goingDown &&
           r.bottom <= vh + edge &&
@@ -1470,33 +1251,22 @@ function main() {
         ) {
           const nextTop = sections[i + 1].getBoundingClientRect().top + y;
           lastBottom[i] = r.bottom;
-          runSectionTransition(i, i + 1, "next", Math.max(0, nextTop));
+          runSectionTransition(i, i + 1, "next", Math.max(0, nextTop), downFlip);
           return;
         }
 
-        // UP — heading back up over this section's end; curtain to it.
+        // UP — section i's end dropped back across the viewport top: curtain
+        // back onto section i (landing at its end), wipe reversed.
         if (
-          i > 0 &&
           goingUp &&
-          r.bottom >= -edge &&
+          r.bottom >= -band &&
           r.bottom <= vh * UP_ARM_FR &&
           (lastBottom[i] < -edge || r.bottom <= band)
         ) {
-          const prevBottom = sections[i - 1].getBoundingClientRect().bottom + y;
+          const iBottom = r.bottom + y;
           lastBottom[i] = r.bottom;
-          runSectionTransition(i, i - 1, "prev", Math.max(0, prevBottom - vh));
+          runSectionTransition(i + 1, i, "prev", Math.max(0, iBottom - vh), !downFlip);
           return;
-        }
-
-        // Debug: heading down near this section's end.
-        if (goingDown && r.top <= vh && r.bottom <= vh * 1.6 && r.bottom >= vh - band - 4) {
-          const now = performance.now();
-          if (now - lastLog > 180) {
-            lastLog = now;
-            console.log("[SectionTx] approach↓ section", i,
-              "{ top:", Math.round(r.top), ", bottom:", Math.round(r.bottom),
-              ", lastBottom:", Math.round(lastBottom[i]), ", vh:", vh, ", target:", Math.round(target), "}");
-          }
         }
 
         lastBottom[i] = r.bottom;
