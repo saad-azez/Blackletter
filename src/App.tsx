@@ -8,12 +8,6 @@ const ChessScene = lazy(() => import('./components/ChessScene'));
 const CurtainDemo = lazy(() =>
   import('./components/CurtainDemo').then((module) => ({ default: module.CurtainDemo })),
 );
-const PaperScrollTransition = lazy(() =>
-  import('./components/PaperScrollTransition').then((module) => ({
-    default: module.PaperScrollTransition,
-  })),
-);
-
 type SceneRoute = 'castle' | 'character' | 'chess';
 
 const sceneRoutes = ['castle', 'character', 'chess'] as const satisfies readonly SceneRoute[];
@@ -350,13 +344,6 @@ function ScrollTransitionDemo() {
           }}
         >
           <h1 style={{ fontSize: 'clamp(3rem, 8vw, 6rem)', margin: 0 }}>{section.title}</h1>
-          {/* Transformed wrapper mimics Webflow's animated containers, which
-              would trap a fixed canvas — the portal must escape it. */}
-          <div style={{ transform: 'translateZ(0)' }}>
-            <Suspense fallback={null}>
-              <PaperScrollTransition direction={section.direction} />
-            </Suspense>
-          </div>
         </section>
       ))}
       <section
