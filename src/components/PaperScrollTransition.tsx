@@ -457,16 +457,14 @@ export function PaperScrollTransition({
     // Without Lenis we fall back to predicting from the raw wheel/touch delta.
     // =====================================================================
 
+    // Lenis heading threshold: how firmly it must be moving in a direction
+    // (target leads the visible position) before we treat it as intent to cross.
     const TARGET_TRIGGER_PX = 6;
-
-    // The detection window must be far wider than a single scroll frame's jump,
-    // or Lenis steps clean over it and the transition never fires. We arm the
-    // check across a generous band around the boundary and decide direction
-    // from where Lenis is HEADING (targetScroll), not the exact rect position.
-    //   APPROACH_BAND_FR — how far before the boundary the check arms.
-    //   CATCH_BEHIND_FR  — how far past it we still catch (safety for overshoot).
-    const APPROACH_BAND_FR = 0.5; // × viewport
-    const CATCH_BEHIND_FR = 0.5; // × viewport
+    // Fire a hair before the edge exactly meets the viewport, so it triggers
+    // right as the section ends rather than a frame or two after.
+    const EDGE_LOOKAHEAD_FR = 0.06; // × viewport
+    // "Up" only arms near the boundary, not from deep inside the section.
+    const UP_ARM_FR = 0.25; // × viewport
 
     const lenisBoundaryCheck = (rect: DOMRect, lenis: LenisLike) => {
       if (performance.now() < transitionBus.cooldownUntil) {
@@ -477,34 +475,30 @@ export function PaperScrollTransition({
       const scrollY = window.scrollY;
       const target =
         typeof lenis.targetScroll === 'number' ? lenis.targetScroll : scrollY;
+      const edge = vh * EDGE_LOOKAHEAD_FR;
 
-      // DOWN — we're inside this section (its top at/above the viewport top),
-      // its end within a band of the viewport bottom, and Lenis heading past
-      // where the section ends.
+      // DOWN — inside this section (its top at/above the viewport top) and its
+      // END has just reached the viewport bottom, with Lenis heading down. This
+      // is the moment the section finishes filling the screen: fire here so the
+      // curtain starts before the next section shows. A one-sided threshold
+      // (bottom <= viewport + edge) can't be stepped over by a fast frame.
       if (
         rect.top <= 2 &&
-        rect.bottom >= vh * (1 - CATCH_BEHIND_FR) &&
-        rect.bottom <= vh * (1 + APPROACH_BAND_FR)
+        rect.bottom <= vh + edge &&
+        target > scrollY + TARGET_TRIGGER_PX
       ) {
-        const boundaryY = scrollY + (rect.bottom - vh);
-
-        if (target > boundaryY + TARGET_TRIGGER_PX) {
-          runTransition('next');
-          return;
-        }
+        runTransition('next');
+        return;
       }
 
-      // UP — this section's end sits near the viewport top and Lenis is heading
-      // back up across it.
+      // UP — heading back up and this section's end has reached the viewport
+      // top, caught only near that boundary (not from deep inside the section).
       if (
-        rect.bottom >= vh * -CATCH_BEHIND_FR &&
-        rect.bottom <= vh * APPROACH_BAND_FR
+        rect.bottom >= -edge &&
+        rect.bottom <= vh * UP_ARM_FR &&
+        target < scrollY - TARGET_TRIGGER_PX
       ) {
-        const boundaryY = scrollY + rect.bottom;
-
-        if (target < boundaryY - TARGET_TRIGGER_PX) {
-          runTransition('previous');
-        }
+        runTransition('previous');
       }
     };
 
