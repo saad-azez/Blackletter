@@ -174,6 +174,10 @@ function easeInOutCubic(t: number) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+// TEMP debug — flip to false / remove once the transitions are dialed in.
+const PAPER_SCROLL_DEBUG = true;
+const PAPER_SCROLL_VERSION = 'cross-2';
+
 export function PaperScrollTransition({
   color = '#1d1d1b',
   direction = 'Bottom to Top',
@@ -221,6 +225,9 @@ export function PaperScrollTransition({
     // (which would re-fire from anywhere past the section).
     let lastBottom = 0;
     let haveLast = false;
+    // Debug: this instance's section label + a log throttle.
+    let logLabel = '?';
+    let lastLog = 0;
 
     // Drive scroll through the page's Lenis smooth-scroll instance when it
     // exists, so the whole transition (including the cross-boundary glide) is
@@ -268,6 +275,31 @@ export function PaperScrollTransition({
 
         if (!section) {
           return null;
+        }
+
+        // Identify this instance by the section it's bound to, and announce it
+        // so we can see exactly which sections carry a transition.
+        const cls =
+          section instanceof HTMLElement && typeof section.className === 'string'
+            ? section.className.trim().split(/\s+/).join('.')
+            : '';
+        logLabel = cls ? section.tagName.toLowerCase() + '.' + cls : section.tagName.toLowerCase();
+
+        if (PAPER_SCROLL_DEBUG) {
+          const r = section.getBoundingClientRect();
+          console.log(
+            '[PaperScroll]',
+            PAPER_SCROLL_VERSION,
+            'MOUNTED on',
+            logLabel,
+            '{ height:',
+            Math.round(r.height),
+            ', dir:',
+            resolvedDirection,
+            ', lenis:',
+            Boolean(getLenis()),
+            '}',
+          );
         }
       }
 
@@ -366,6 +398,23 @@ export function PaperScrollTransition({
       }
 
       const coverFlip = towards === 'next' ? downCoverFlip : !downCoverFlip;
+
+      if (PAPER_SCROLL_DEBUG) {
+        const r = section.getBoundingClientRect();
+        console.log(
+          '[PaperScroll]',
+          logLabel,
+          '>>> FIRE',
+          towards,
+          '{ scrollY:',
+          Math.round(window.scrollY),
+          ', top:',
+          Math.round(r.top),
+          ', bottom:',
+          Math.round(r.bottom),
+          '}',
+        );
+      }
 
       running = true;
       runningTowards = towards;
@@ -483,6 +532,40 @@ export function PaperScrollTransition({
       const band = vh * STATE_BAND_FR;
       const goingDown = rect.bottom < lastBottom;
       const goingUp = rect.bottom > lastBottom;
+
+      // Debug: while heading down anywhere near this section's end, report what
+      // the instance sees and whether it will fire — so we can see exactly why a
+      // given boundary does or doesn't trigger.
+      if (
+        PAPER_SCROLL_DEBUG &&
+        goingDown &&
+        rect.top <= vh &&
+        rect.bottom <= vh * 1.6 &&
+        rect.bottom >= vh - band - 4
+      ) {
+        const now = performance.now();
+        if (now - lastLog > 180) {
+          lastLog = now;
+          const willFire =
+            rect.top <= 2 &&
+            rect.bottom <= vh + edge &&
+            (lastBottom > vh + edge || rect.bottom >= vh - band);
+          console.log(
+            '[PaperScroll]',
+            logLabel,
+            'approach↓',
+            '{ top:', Math.round(rect.top),
+            ', bottom:', Math.round(rect.bottom),
+            ', lastBottom:', Math.round(lastBottom),
+            ', vh:', vh,
+            ', topOk:', rect.top <= 2,
+            ', crossed:', lastBottom > vh + edge,
+            ', atBand:', rect.bottom >= vh - band,
+            ', willFire:', willFire,
+            '}',
+          );
+        }
+      }
 
       // DOWN — scrolling down and the section's bottom just reached the viewport
       // bottom (its end). Fire only when we CROSS that line this frame, or are
