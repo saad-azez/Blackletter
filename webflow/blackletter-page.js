@@ -1183,20 +1183,23 @@ function main() {
       else window.scrollTo(0, y);
     }
 
-    function runSectionTransition(fromIdx, toIdx, towards, targetY, coverFlip) {
+    function runSectionTransition(fromIdx, toIdx, towards, restY, targetY, coverFlip) {
       if (running || !ensureEffect()) return;
       running = true;
 
       console.log("[SectionTx] >>> FIRE", towards, "from", fromIdx, "->", toIdx,
-        "scrollY=" + Math.round(window.scrollY), "targetY=" + Math.round(targetY),
-        "flip=" + coverFlip);
+        "restY=" + Math.round(restY), "targetY=" + Math.round(targetY), "flip=" + coverFlip);
 
       emit("start", towards);
+      // Snap the LEAVING section back to full view before the curtain starts,
+      // so the cover-in shows it — never the neighbour we may have already
+      // scrolled a hair into. Done this same frame, before paint.
+      setScroll(restY);
       effect.setAxisFlip(coverFlip);
       effect.state.progress = 0;
       canvas.style.opacity = "1";
 
-      const proxy = { y: window.scrollY };
+      const proxy = { y: restY };
       const tl = gsap.timeline({
         onComplete: () => {
           canvas.style.opacity = "0";
@@ -1256,32 +1259,32 @@ function main() {
       const sectionEnd = (rj.bottom + y) - vh; // scroll where j's bottom hits the viewport bottom
       const sectionTop = rj.top + y;           // scroll where j's top hits the viewport top
 
-      // DOWN — heading past section j's end: curtain to j+1.
+      // DOWN — heading past section j's end: curtain to j+1. restY clamps the
+      // leaving view to j's end so any overshoot into j+1 is snapped away.
       if (j < sections.length - 1 && target > sectionEnd + INTENT_PX) {
         const nextTop = sections[j + 1].getBoundingClientRect().top + y;
-        runSectionTransition(j, j + 1, "next", Math.max(0, nextTop), downFlipOf(j));
+        const restY = Math.max(0, Math.min(y, sectionEnd));
+        runSectionTransition(j, j + 1, "next", restY, Math.max(0, nextTop), downFlipOf(j));
         return;
       }
 
       // UP — heading above section j's top: curtain back to j-1 (its end). The
-      // wipe uses the boundary's upper section (j-1), reversed.
+      // wipe uses the boundary's upper section (j-1), reversed. restY clamps the
+      // leaving view to j's top so any overshoot up into j-1 is snapped away.
       if (j > 0 && target < sectionTop - INTENT_PX) {
         const prev = sections[j - 1].getBoundingClientRect();
         const prevEnd = (prev.bottom + y) - vh;
-        runSectionTransition(j, j - 1, "prev", Math.max(0, prevEnd), !downFlipOf(j - 1));
+        const restY = Math.max(y, sectionTop);
+        runSectionTransition(j, j - 1, "prev", restY, Math.max(0, prevEnd), !downFlipOf(j - 1));
         return;
       }
     }
 
-    let scheduled = false;
-    function schedule() {
-      if (!scheduled) {
-        scheduled = true;
-        requestAnimationFrame(() => { scheduled = false; check(); });
-      }
-    }
-    window.addEventListener("scroll", schedule, { passive: true });
-    window.addEventListener("resize", schedule, { passive: true });
+    // Run the check on the GSAP ticker, which fires AFTER Lenis's raf each
+    // frame (Lenis was added first) and BEFORE the browser paints — so if a
+    // fast scroll pushed the page a hair past a boundary, we snap it back the
+    // same frame and that overshoot is never painted.
+    gsap.ticker.add(check);
 
     // Swallow scroll input while the curtain covers.
     function block(event) {
