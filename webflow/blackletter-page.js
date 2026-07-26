@@ -1121,14 +1121,11 @@ function main() {
 
     const paperColor = getCSSColor("--paper-color-one", "#1d1d1b");
     const COVER = 0.9, GLIDE = 0.32, REVEAL = 1.3, COOLDOWN_MS = 500;
-    // EDGE = lookahead so the curtain starts just BEFORE the next section
-    // shows; BAND = "were we near this section's end last frame?" tolerance,
-    // wide enough that an aggressive scroll frame can't jump the trigger.
-    const EDGE_FR = 0.08, BAND_FR = 0.25;
+    // How firmly Lenis must be heading past a boundary before we treat it as
+    // intent to cross (px of lead over the current scroll).
+    const INTENT_PX = 4;
 
     let canvas = null, effect = null, running = false, cooldownUntil = 0;
-    const lastBottom = new Array(sections.length).fill(0);
-    const haveLast = new Array(sections.length).fill(false);
 
     function ensureEffect() {
       if (effect) return true;
@@ -1205,7 +1202,6 @@ function main() {
           canvas.style.opacity = "0";
           running = false;
           cooldownUntil = performance.now() + COOLDOWN_MS;
-          for (let i = 0; i < haveLast.length; i++) haveLast[i] = false;
           emit("end", towards);
         },
       });
@@ -1220,60 +1216,60 @@ function main() {
       tl.to(effect.state, { progress: 0, duration: REVEAL, ease: "power2.inOut" }, COVER + GLIDE);
     }
 
+    // "bottom to top" (default) -> downFlip true; "top to bottom" -> false.
+    function downFlipOf(i) {
+      const attr = (sections[i].getAttribute("data-paper-transition") || "").toLowerCase();
+      return attr.indexOf("top") !== 0;
+    }
+
+    // The section currently filling the viewport = the one containing the
+    // viewport's vertical midpoint. Re-derived every check so it's always
+    // correct (no state to drift), and it self-heals after any manual jump.
+    function activeIndex(y, vh) {
+      const mid = y + vh * 0.5;
+      let best = 0, bestDist = Infinity;
+      for (let j = 0; j < sections.length; j++) {
+        const r = sections[j].getBoundingClientRect();
+        if (r.height < 2) continue;
+        const top = r.top + y, bot = r.bottom + y;
+        if (mid >= top && mid < bot) return j;
+        const dist = Math.min(Math.abs(mid - top), Math.abs(mid - bot));
+        if (dist < bestDist) { bestDist = dist; best = j; }
+      }
+      return best;
+    }
+
     function check() {
       if (running || paperTransitionActive || performance.now() < cooldownUntil || !lenis) return;
 
       const vh = window.innerHeight;
       const y = window.scrollY;
-      const edge = vh * EDGE_FR, band = vh * BAND_FR;
+      const target = typeof lenis.targetScroll === "number" ? lenis.targetScroll : y;
 
-      // Each boundary is section i's BOTTOM, shared with section i+1. Both
-      // directions of that one boundary are handled here on section i:
-      //   scrolling down across it  -> curtain to i+1
-      //   scrolling up   across it  -> curtain back onto i (at its end)
-      // The wipe direction comes from section i's attribute and is reversed on
-      // the way up, so a boundary always plays the same, mirrored either way.
-      for (let i = 0; i < sections.length - 1; i++) {
-        const r = sections[i].getBoundingClientRect();
-        if (r.height < 2) { haveLast[i] = false; continue; }
-        if (!haveLast[i]) { lastBottom[i] = r.bottom; haveLast[i] = true; continue; }
+      // Fire on INTENT: as soon as Lenis is heading past the current section's
+      // boundary — while that section still fills the screen — so the curtain
+      // covers before any neighbour peeks in, both directions.
+      const j = activeIndex(y, vh);
+      const rj = sections[j].getBoundingClientRect();
+      if (rj.height < 2) return;
 
-        const goingDown = r.bottom < lastBottom[i];
-        const goingUp = r.bottom > lastBottom[i];
+      const sectionEnd = (rj.bottom + y) - vh; // scroll where j's bottom hits the viewport bottom
+      const sectionTop = rj.top + y;           // scroll where j's top hits the viewport top
 
-        // "bottom to top" (default) -> downFlip true; "top to bottom" -> false.
-        const attr = (sections[i].getAttribute("data-paper-transition") || "").toLowerCase();
-        const downFlip = attr.indexOf("top") === 0 ? false : true;
+      // DOWN — heading past section j's end: curtain to j+1.
+      if (j < sections.length - 1 && target > sectionEnd + INTENT_PX) {
+        const nextTop = sections[j + 1].getBoundingClientRect().top + y;
+        runSectionTransition(j, j + 1, "next", Math.max(0, nextTop), downFlipOf(j));
+        return;
+      }
 
-        // DOWN — section i's bottom is crossing the viewport bottom (its end),
-        // and we were at/near that end last frame. Fires from the boundary even
-        // after landing there, and can't be jumped by a fast frame.
-        if (
-          r.top <= 2 &&
-          goingDown &&
-          lastBottom[i] >= vh - band &&
-          r.bottom <= vh + edge
-        ) {
-          const nextTop = sections[i + 1].getBoundingClientRect().top + y;
-          lastBottom[i] = r.bottom;
-          runSectionTransition(i, i + 1, "next", Math.max(0, nextTop), downFlip);
-          return;
-        }
-
-        // UP — section i's bottom is crossing the viewport top going up (back
-        // into i from i+1); land at section i's end, wipe reversed.
-        if (
-          goingUp &&
-          lastBottom[i] <= band &&
-          r.bottom >= -edge
-        ) {
-          const iBottom = r.bottom + y;
-          lastBottom[i] = r.bottom;
-          runSectionTransition(i + 1, i, "prev", Math.max(0, iBottom - vh), !downFlip);
-          return;
-        }
-
-        lastBottom[i] = r.bottom;
+      // UP — heading above section j's top: curtain back to j-1 (its end). The
+      // wipe uses the boundary's upper section (j-1), reversed.
+      if (j > 0 && target < sectionTop - INTENT_PX) {
+        const prev = sections[j - 1].getBoundingClientRect();
+        const prevEnd = (prev.bottom + y) - vh;
+        runSectionTransition(j, j - 1, "prev", Math.max(0, prevEnd), !downFlipOf(j - 1));
+        return;
       }
     }
 
