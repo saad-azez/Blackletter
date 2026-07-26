@@ -1120,7 +1120,10 @@ function main() {
     );
 
     const paperColor = getCSSColor("--paper-color-one", "#1d1d1b");
-    const COVER = 0.9, GLIDE = 0.32, REVEAL = 1.3, COOLDOWN_MS = 500;
+    // COOLDOWN_MS only debounces a second curtain now — it no longer leaves the
+    // boundary unguarded (check() clamps to the edge while it runs), so it can
+    // be short enough that a deliberate reversal doesn't feel stuck.
+    const COVER = 0.9, GLIDE = 0.32, REVEAL = 1.3, COOLDOWN_MS = 250;
 
     let canvas = null, effect = null, running = false, cooldownUntil = 0;
 
@@ -1259,7 +1262,14 @@ function main() {
       lastY = y;
       haveLastY = true;
 
-      if (performance.now() < cooldownUntil) return;
+      // The cooldown must never mean "stop watching the zone" — that was the
+      // hole. Input is only swallowed while `running`; the instant the curtain
+      // ends, wheel/touch flow again, and a still-in-progress fling used to
+      // sail straight across the zone for the whole cooldown with nothing
+      // guarding it. That is the frame where the neighbouring section shows
+      // through. Now we still detect the crossing while cooling — we just hold
+      // the scroll at the edge instead of stacking a second curtain.
+      const cooling = performance.now() < cooldownUntil;
 
       for (let k = 0; k < sections.length - 1; k++) {
         const rk = sections[k].getBoundingClientRect();
@@ -1281,6 +1291,17 @@ function main() {
         // where Lenis is heading when the delta is zero.
         const target = typeof lenis.targetScroll === "number" ? lenis.targetScroll : y;
         const goingDown = y !== prevY ? y > prevY : target > y;
+
+        // Still settling from the last curtain: pin the scroll to the edge we
+        // came from. `scrollTo({ immediate })` resets Lenis's target too, so a
+        // fling's tail is drained a frame at a time rather than fighting us,
+        // and the curtain fires the moment the cooldown lifts.
+        if (cooling) {
+          const hold = goingDown ? downEdge : upEdge;
+          lastY = hold;
+          if (Math.round(y) !== Math.round(hold)) setScroll(hold);
+          return;
+        }
 
         if (goingDown) {
           // Snap back so section k fully fills the screen, then glide to k+1.
