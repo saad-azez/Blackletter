@@ -1223,6 +1223,37 @@ function main() {
       tl.to(effect.state, { progress: 0, duration: REVEAL, ease: "power2.inOut" }, COVER + GLIDE);
     }
 
+    /* Two rules make a marked section work, and neither is obvious from
+       Webflow: it must be at least one viewport tall (or there is no scroll
+       position where it alone fills the screen), and the next marked section
+       must start exactly where it ends (both zone edges are derived from that
+       one shared boundary — anything sitting in between is never covered).
+       Sections measure h=0 until the experience starts, so audit lazily, once
+       everything has real layout. */
+    let audited = false;
+    function audit(vh) {
+      const name = (el) => el.className || el.tagName;
+      for (let i = 0; i < sections.length; i++) {
+        if (sections[i].getBoundingClientRect().height < 2) return; // not laid out yet
+      }
+      audited = true;
+      for (let k = 0; k < sections.length - 1; k++) {
+        const ra = sections[k].getBoundingClientRect();
+        const rb = sections[k + 1].getBoundingClientRect();
+        if (ra.height < vh) {
+          console.warn("[SectionTx] " + name(sections[k]) + " is " + Math.round(ra.height) +
+            "px tall, under one viewport (" + vh + "px) — no curtain between it and " +
+            name(sections[k + 1]) + ". A marked section needs at least 100vh.");
+        }
+        const gap = Math.round(rb.top - ra.bottom);
+        if (Math.abs(gap) > 2) {
+          console.warn("[SectionTx] " + gap + "px sits between " + name(sections[k]) + " and " +
+            name(sections[k + 1]) + ". Marked sections must be adjacent — whatever is " +
+            "between them is never covered by the curtain and will flash.");
+        }
+      }
+    }
+
     // "bottom to top" (default) -> downFlip true; "top to bottom" -> false.
     function downFlipOf(i) {
       const attr = (sections[i].getAttribute("data-paper-transition") || "").toLowerCase();
@@ -1254,9 +1285,20 @@ function main() {
     let haveLastY = false;
 
     function check() {
-      if (running || paperTransitionActive || !lenis) return;
+      // Drop the position history while ANY curtain owns the scroll (ours, the
+      // footer loop's glide-home, the hero intro). Those move the page by
+      // thousands of px programmatically; keeping the pre-jump position as
+      // `prevY` would make the next real frame look like a fling clean across
+      // a boundary. That is what fired a transition on the first wheel nudge
+      // after the footer loop returned to the top.
+      if (running || paperTransitionActive || !lenis) {
+        haveLastY = false;
+        return;
+      }
 
       const vh = window.innerHeight;
+      if (!audited) audit(vh);
+
       const y = window.scrollY;
       const prevY = haveLastY ? lastY : y;
       lastY = y;
@@ -1279,11 +1321,22 @@ function main() {
         const edge = rk.bottom + y;   // absolute scroll of the shared edge
         const downEdge = edge - vh;   // section k fills the viewport (its end)
         const upEdge = edge;          // section k+1 fills the viewport (its top)
-        if (downEdge >= upEdge) continue; // degenerate (section shorter than vh)
+        // A section shorter than the viewport has no scroll position where it
+        // alone fills the screen: downEdge lands above its own top, inside its
+        // predecessor, so its zone overlaps the previous one and the two fire
+        // at each other. Skip the pair rather than ping-pong. (The old test,
+        // downEdge >= upEdge, was `-vh >= 0` — it never tripped.)
+        if (rk.height < vh) continue;
+
+        // A crossing is only credible if the frame delta is scroll-sized. Even
+        // a hard fling moves well under a viewport per frame; anything larger
+        // is a teleport (scroll restoration on reload, an anchor jump, a glide
+        // we did not run) and must not be read as crossing the boundary.
+        const plausibleStep = Math.abs(y - prevY) <= vh * 1.5;
 
         const inZone = y > downEdge && y < upEdge;
-        const jumpedDown = prevY <= downEdge && y >= upEdge; // flung clean over
-        const jumpedUp = prevY >= upEdge && y <= downEdge;
+        const jumpedDown = plausibleStep && prevY <= downEdge && y >= upEdge; // flung clean over
+        const jumpedUp = plausibleStep && prevY >= upEdge && y <= downEdge;
 
         if (!inZone && !jumpedDown && !jumpedUp) continue;
 
