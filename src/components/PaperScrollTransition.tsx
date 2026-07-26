@@ -176,7 +176,7 @@ function easeInOutCubic(t: number) {
 
 // TEMP debug — flip to false / remove once the transitions are dialed in.
 const PAPER_SCROLL_DEBUG = true;
-const PAPER_SCROLL_VERSION = 'cross-2';
+const PAPER_SCROLL_VERSION = 'cross-3';
 
 export function PaperScrollTransition({
   color = '#1d1d1b',
