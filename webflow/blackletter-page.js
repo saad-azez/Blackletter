@@ -685,6 +685,26 @@ function main() {
       animateHeroIn();
     }
 
+    /* ---------- castle reveal hand-over ----------
+       The castle section is what the curtain uncovers, and the last thing
+       on screen before it appears is a full frame of the sheet's background
+       colour. Hand that colour to the code island so its own reveal can open
+       on the exact frame the curtain ended on — the swap between the two
+       becomes invisible and the whole thing reads as one move.
+
+       Fired on the next rAF, so ScrollTrigger.refresh() and the first resize
+       of refresh3DLayoutBurst() have already given the island its real box.
+       The same detail is parked on window for an island that finished
+       mounting a frame or two late (the section is hidden until now), so it
+       can pick up the reveal it just missed. */
+    function startCastleReveal(flashColor) {
+      const detail = { at: Date.now(), flashColor };
+      window.__blackletterEnterExperience = detail;
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new CustomEvent("blackletter:enter-experience", { detail }));
+      });
+    }
+
     /* ---------- "Start the Experience" page turn ---------- */
     button.addEventListener("click", function (event) {
       event.preventDefault();
@@ -717,6 +737,7 @@ function main() {
           ScrollTrigger.refresh();
           refresh3DLayoutBurst();
           animateScriptureIn();
+          startCastleReveal(paperTwo);
         });
       });
     });

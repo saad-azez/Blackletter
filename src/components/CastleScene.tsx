@@ -214,6 +214,44 @@ function getBaseTransform(object: THREE.Object3D | null): BaseTransform | null {
   return (object?.userData.__base as BaseTransform | undefined) ?? null;
 }
 
+function forEachMaterial(
+  object: THREE.Object3D | null,
+  visit: (material: THREE.MeshStandardMaterial) => void,
+) {
+  const mesh = object as THREE.Mesh | null;
+
+  if (!mesh?.isMesh) {
+    return;
+  }
+
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+
+  materials.forEach((material) => {
+    visit(material as THREE.MeshStandardMaterial);
+  });
+}
+
+/** The vortex sky and the rocks are pure emission planes (buildVortexRig
+    zeroes their lit base colour), so their emissiveIntensity IS their
+    brightness — the one dial that can fade them up out of the flash. */
+function captureEmissiveBase(object: THREE.Object3D | null) {
+  forEachMaterial(object, (material) => {
+    if (material.userData.__baseEmissiveIntensity === undefined) {
+      material.userData.__baseEmissiveIntensity = material.emissiveIntensity;
+    }
+  });
+}
+
+function setEmissiveScale(object: THREE.Object3D | null, scale: number) {
+  forEachMaterial(object, (material) => {
+    const base = material.userData.__baseEmissiveIntensity as number | undefined;
+
+    if (base !== undefined) {
+      material.emissiveIntensity = base * scale;
+    }
+  });
+}
+
 /** Debug-only offsets a designer can nudge live; all additive/multiplicative
     atop the authored/fitted rest state, so the scroll and pointer animation
     keep working exactly as before while the panel is open. */
@@ -302,9 +340,17 @@ function applyDebugOffsets(rig: VortexRig, camera: THREE.PerspectiveCamera | nul
 
 interface VortexRig {
   castleRig: THREE.Group | null;
+  /** The cathedral body — the castle's broad, low mass. */
+  cathedral: THREE.Object3D | null;
+  fill: THREE.HemisphereLight | null;
+  /** The tall spire behind the cathedral. */
+  keepTower: THREE.Object3D | null;
   pitch: THREE.Group;
   rocks: THREE.Object3D | null;
   sky: THREE.Object3D | null;
+  sun: THREE.DirectionalLight | null;
+  towerLeft: THREE.Object3D | null;
+  towerRight: THREE.Object3D | null;
   towersGroup: THREE.Object3D | null;
 }
 
@@ -327,6 +373,11 @@ function prepareAuthoredCamera(gltf: LoadedVortexScene): THREE.PerspectiveCamera
     camera.userData.__authoredFovBase = camera.fov;
     camera.userData.__authoredFov = camera.fov;
     camera.userData.__authoredPosition = camera.position.clone();
+    // The intro moves the camera off its mark, so its rest orientation has
+    // to be read from here rather than from the live transform — otherwise a
+    // reveal starting while another is still running would take the offset
+    // pose for the authored one and drift.
+    camera.userData.__authoredQuaternion = camera.quaternion.clone();
   }
 
   return camera;
@@ -704,16 +755,23 @@ function scaleCastleUp(pitch: THREE.Group, castleParts: THREE.Object3D[]): THREE
  * (GRP_Towers), Foreground_Rocks, Backdrop_VortexSky, Light_Sun and
  * Camera_Main. The castle and towers are re-parented into a pitch rig so
  * they can rear up on scroll without taking the sky, rocks, camera or
- * light with them. The rocks are deliberately never animated — they sit
- * exactly where the file authors them. useGLTF caches the scene per URL,
- * so the restructure and the animation baselines are only ever captured
- * once.
+ * light with them. The scroll animation leaves the rocks exactly where the
+ * file authors them; only the intro reveal moves them. useGLTF caches the
+ * scene per URL, so the restructure and the animation baselines are only
+ * ever captured once.
  */
 function buildVortexRig(gltf: LoadedVortexScene, sceneUrl: string): VortexRig {
   const root = gltf.scene;
   const sky = root.getObjectByName('Backdrop_VortexSky') ?? null;
   const rocks = root.getObjectByName('Foreground_Rocks') ?? null;
   const towers = root.getObjectByName('GRP_Towers') ?? null;
+  // Individually addressable so the intro can stagger them; every one of
+  // them is optional, and a missing node simply drops out of the reveal.
+  const cathedral = root.getObjectByName('Castle_Cathedral') ?? null;
+  const keepTower = root.getObjectByName('Castle_KeepTower') ?? null;
+  const towerLeft = root.getObjectByName('Tower_Left') ?? null;
+  const towerRight = root.getObjectByName('Tower_Right') ?? null;
+  const sun = (root.getObjectByName('Light_Sun') ?? null) as THREE.DirectionalLight | null;
 
   ['Backdrop_VortexSky', 'GRP_Towers'].forEach((name) => {
     if (!root.getObjectByName(name)) {
@@ -831,16 +889,37 @@ function buildVortexRig(gltf: LoadedVortexScene, sceneUrl: string): VortexRig {
     if (castleRig) captureBaseTransform(castleRig);
     if (towers) captureBaseTransform(towers);
 
+    // The intro's own targets. These must be captured AFTER scaleCastleUp:
+    // attach() rewrites each part's local transform to preserve its world
+    // position, so a baseline read before the re-parent would be the wrong
+    // rest state to animate back to.
+    [cathedral, keepTower, towerLeft, towerRight, sun].forEach((object) => {
+      if (object) captureBaseTransform(object);
+    });
+    captureEmissiveBase(sky);
+    captureEmissiveBase(rocks);
+
+    if (sun) sun.userData.__baseIntensity = sun.intensity;
+    fillLight.userData.__baseIntensity = fillLight.intensity;
+
     root.userData.__castleRig = castleRig;
+    root.userData.__fillLight = fillLight;
   }
 
   const castleRig = (root.userData.__castleRig as THREE.Group | undefined) ?? null;
+  const fill = (root.userData.__fillLight as THREE.HemisphereLight | undefined) ?? null;
 
   return {
     castleRig,
+    cathedral,
+    fill,
+    keepTower,
     pitch,
     rocks,
     sky,
+    sun,
+    towerLeft,
+    towerRight,
     towersGroup: towers,
   };
 }
@@ -875,6 +954,573 @@ function animateVortexRig(
   pitch.rotation.y = pointer.x * POINTER_YAW_RAD;
 }
 
+/* ============================================================
+   INTRO — the "Start Experience" reveal
+   ============================================================
+
+   The page script (webflow/blackletter-page.js) tears a paper curtain open
+   over the hero, then hands the screen to this section. At that instant the
+   only thing on screen is the flat colour the curtain left behind, so the
+   reveal opens on that exact colour and dissolves it off the lens — the cut
+   between the two components is invisible, and what the viewer reads is one
+   continuous move: a flash, then the world resolving out of it.
+
+   Everything below layers ON TOP of the rest state the rig was fitted into,
+   never replaces it:
+
+     - nodes the per-frame animation already writes (the pitch rig's x/y
+       rotation, the sky's scale) are ADDED to / MULTIPLIED by, after
+       animateVortexRig has assigned them for this frame;
+     - every other node is assigned base + offset(p), so at p = 1 the scene
+       is bit-for-bit its authored rest state again and the intro can simply
+       stop touching it.
+
+   The pointer parallax is deliberately untouched: it rides on the same pitch
+   rig and keeps working, at full strength, throughout the reveal.
+*/
+
+/** Fired by the page script the moment the curtain hands over the screen. */
+const INTRO_EVENT = 'blackletter:enter-experience';
+
+/** The page also parks the same detail here, so an island that finished
+    mounting a few frames late still catches the reveal it just missed. */
+const INTRO_STATE_KEY = '__blackletterEnterExperience';
+const INTRO_LATE_MOUNT_MS = 2000;
+
+const INTRO_DURATION = 4.2;
+
+/** Matches --paper-color-two, the colour the curtain leaves on screen. */
+const INTRO_FLASH_COLOR = '#ffffff';
+const INTRO_FLASH_NAME = 'IntroFlash';
+const INTRO_FLASH_DISTANCE = 0.35;
+const INTRO_FLASH_BLEED = 1.06;
+
+/**
+ * The reveal as a score: [start, end] windows in normalised intro time.
+ * Read top to bottom it is the running order — the vortex and the light
+ * establish the world, the castle rises out from behind the rocks, the
+ * flanking towers sweep in to frame it, and the foreground rocks settle
+ * last, because the nearest thing in a real camera move always arrives late.
+ */
+const INTRO_SCORE = {
+  /** The curtain's leftover colour dissolving off the lens. */
+  flash: [0, 0.14],
+  /** Vortex: over-scaled and slowly unwinding back to rest. */
+  sky: [0, 0.95],
+  /** Vortex emission cooling down out of the flash. */
+  skyGlow: [0, 0.34],
+  /** Sun: blown out, settling to the authored key light. */
+  sunGlow: [0.02, 0.55],
+  /** Sun: the shadow raking across the stone as the light swings home. */
+  sunSwing: [0, 0.85],
+  fill: [0, 0.5],
+  /** The whole castle + towers rig swinging up out of its lean. */
+  swing: [0, 0.9],
+  castle: [0.04, 0.72],
+  cathedral: [0.06, 0.62],
+  keep: [0.12, 0.78],
+  towers: [0.1, 0.8],
+  towerLeft: [0.12, 0.7],
+  towerRight: [0.17, 0.75],
+  camera: [0, 0.92],
+  rocks: [0.14, 1],
+  rocksGlow: [0.05, 0.5],
+} as const;
+
+/**
+ * Amplitudes. Distances are fractions of the thing they move — of the
+ * castle's own height, of the towers' half-width, of the camera-to-castle
+ * distance — measured live in measureIntro, so the reveal keeps its
+ * proportions on any authored GLB the designer points the component at
+ * rather than being tied to one file's units.
+ */
+const INTRO_AMOUNT = {
+  cameraDolly: 0.16,
+  cameraLift: 0.05,
+  cameraPitchDeg: 1.6,
+  cameraRollDeg: 0.9,
+  skyZoom: 0.3,
+  skyRollDeg: 2.6,
+  skyGlow: 1.55,
+  sunGlow: 1.85,
+  sunSwingXDeg: 4.5,
+  sunSwingYDeg: -6,
+  fillGlow: 2.4,
+  swingPitchRad: 0.085,
+  swingYawRad: 0.05,
+  swingRollRad: 0.022,
+  castleRise: 0.3,
+  castleScale: 0.9,
+  castleYawDeg: 9,
+  cathedralRise: 0.16,
+  keepRise: 0.26,
+  keepStretch: 1.07,
+  towerRise: 0.2,
+  towerSpread: 0.14,
+  towerLeanDeg: 3.5,
+  rocksDrop: 0.16,
+  rocksZoom: 1.07,
+  rocksGlow: 0.25,
+} as const;
+
+type IntroWindow = readonly [number, number];
+
+/** Progress through one window of the score, clamped to [0, 1]. */
+function span(p: number, window: IntroWindow) {
+  const [start, end] = window;
+
+  return THREE.MathUtils.clamp((p - start) / Math.max(end - start, 1e-6), 0, 1);
+}
+
+function easeOutCubic(t: number) {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function easeOutQuint(t: number) {
+  return 1 - Math.pow(1 - t, 5);
+}
+
+function easeOutExpo(t: number) {
+  return t >= 1 ? 1 : 1 - Math.pow(2, -10 * t);
+}
+
+function easeInOutCubic(t: number) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/** Interpolates from `from` down to 1 as `eased` runs 0 → 1. */
+function settleTo1(from: number, eased: number) {
+  return from + (1 - from) * eased;
+}
+
+interface IntroPlan {
+  cameraDolly: number;
+  cameraForward: THREE.Vector3;
+  cameraLift: number;
+  cameraPosition: THREE.Vector3;
+  cameraQuaternion: THREE.Quaternion;
+  cameraUp: THREE.Vector3;
+  castleRise: number;
+  cathedralRise: number;
+  keepRise: number;
+  towerLeftSign: number;
+  towerRightSign: number;
+  towerRise: number;
+  towerSpread: number;
+}
+
+const introScratch = {
+  euler: new THREE.Euler(),
+  quaternion: new THREE.Quaternion(),
+  vector: new THREE.Vector3(),
+};
+
+/**
+ * An object's size along one axis, expressed in its PARENT's units — the
+ * space a local position offset actually moves it through. The world AABB is
+ * divided back down by the parent's world scale, so a castle sitting under a
+ * 1.35x-scaled rig still gets an offset that reads as "a third of its own
+ * height" on screen.
+ */
+function localExtent(object: THREE.Object3D | null, axis: 'x' | 'y' | 'z') {
+  if (!object) {
+    return 0;
+  }
+
+  const box = new THREE.Box3().setFromObject(object);
+
+  if (box.isEmpty()) {
+    return 0;
+  }
+
+  const worldExtent = box.max[axis] - box.min[axis];
+  const parentScale = object.parent
+    ? Math.abs(object.parent.getWorldScale(introScratch.vector)[axis])
+    : 1;
+
+  return worldExtent / (parentScale || 1);
+}
+
+/**
+ * Measure the scene once, at the moment the reveal starts, and turn the
+ * fractional amplitudes above into real distances in each node's own local
+ * space. Everything measured here is viewport-independent, so a resize
+ * landing mid-reveal (the page fires a burst of them as the sections gain
+ * their height) can't invalidate it — the sky and rocks re-fit and re-capture
+ * their own baselines, which applyIntro re-reads every frame anyway.
+ */
+function measureIntro(rig: VortexRig, camera: THREE.PerspectiveCamera | null): IntroPlan {
+  const castleHeight = localExtent(rig.castleRig, 'y');
+  const towerHeight = localExtent(rig.towerLeft ?? rig.towerRight, 'y');
+  const towersHalfWidth = localExtent(rig.towersGroup, 'x') / 2;
+
+  const cameraPosition =
+    (camera?.userData.__authoredPosition as THREE.Vector3 | undefined)?.clone() ??
+    camera?.position.clone() ??
+    new THREE.Vector3();
+  const cameraQuaternion =
+    (camera?.userData.__authoredQuaternion as THREE.Quaternion | undefined)?.clone() ??
+    camera?.quaternion.clone() ??
+    new THREE.Quaternion();
+  // The camera's own axes, expressed in its parent's space — the space its
+  // position lives in — so the dolly runs straight down the lens whatever
+  // orientation the file authored it at.
+  const cameraForward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+  const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cameraQuaternion);
+
+  const castleWorld = rig.castleRig?.getWorldPosition(new THREE.Vector3()) ?? new THREE.Vector3();
+  const cameraWorld = camera?.getWorldPosition(new THREE.Vector3()) ?? new THREE.Vector3();
+  const castleDistance = castleWorld.distanceTo(cameraWorld) || 1;
+
+  // Which way each flanking tower steps aside, taken from where it actually
+  // sits in the group rather than from its name.
+  const towersCenterX =
+    ((rig.towerLeft?.position.x ?? 0) + (rig.towerRight?.position.x ?? 0)) / 2;
+  const sideOf = (tower: THREE.Object3D | null, fallback: number) => {
+    if (!tower) {
+      return fallback;
+    }
+
+    return Math.sign(tower.position.x - towersCenterX) || fallback;
+  };
+
+  return {
+    cameraDolly: castleDistance * INTRO_AMOUNT.cameraDolly,
+    cameraForward,
+    cameraLift: castleDistance * INTRO_AMOUNT.cameraLift,
+    cameraPosition,
+    cameraQuaternion,
+    cameraUp,
+    castleRise: castleHeight * INTRO_AMOUNT.castleRise,
+    cathedralRise: localExtent(rig.cathedral, 'y') * INTRO_AMOUNT.cathedralRise,
+    keepRise: localExtent(rig.keepTower, 'y') * INTRO_AMOUNT.keepRise,
+    towerLeftSign: sideOf(rig.towerLeft, -1),
+    towerRightSign: sideOf(rig.towerRight, 1),
+    towerRise: towerHeight * INTRO_AMOUNT.towerRise,
+    towerSpread: towersHalfWidth * INTRO_AMOUNT.towerSpread,
+  };
+}
+
+/** The full-frame sheet the reveal opens on, parented to the camera so it
+    covers the lens no matter where the dolly has taken it. */
+function ensureIntroFlash(camera: THREE.PerspectiveCamera, color: string) {
+  const existing = camera.getObjectByName(INTRO_FLASH_NAME) as THREE.Mesh | undefined;
+
+  if (existing) {
+    (existing.material as THREE.MeshBasicMaterial).color.set(color);
+    existing.visible = true;
+
+    return existing;
+  }
+
+  const flash = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({
+      color,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+      transparent: true,
+    }),
+  );
+
+  flash.name = INTRO_FLASH_NAME;
+  // Nothing may cull or sort in front of it: it is the screen for a moment.
+  flash.frustumCulled = false;
+  flash.renderOrder = 999;
+  camera.add(flash);
+
+  return flash;
+}
+
+function removeIntroFlash(camera: THREE.PerspectiveCamera | null) {
+  const flash = camera?.getObjectByName(INTRO_FLASH_NAME) as THREE.Mesh | undefined;
+
+  if (!camera || !flash) {
+    return;
+  }
+
+  camera.remove(flash);
+  flash.geometry.dispose();
+  (flash.material as THREE.Material).dispose();
+}
+
+/**
+ * One frame of the reveal. Runs immediately after animateVortexRig, and is
+ * a pure function of `p` — it never accumulates, so it can be driven forward,
+ * restarted, or jumped straight to 1 (which restores the authored rest state
+ * exactly, and is how the reveal ends).
+ */
+function applyIntro(
+  rig: VortexRig,
+  camera: THREE.PerspectiveCamera | null,
+  plan: IntroPlan,
+  p: number,
+) {
+  // Every camera displacement decays on a quintic; the backdrop's extra
+  // coverage on a cubic over a slightly longer window. easeOutCubic(t) is
+  // <= easeOutQuint(t) for all t, so the sky's margin always outlives the
+  // motion that could swing a frame edge off it — the void behind the
+  // backdrop can never show, at any point in the reveal.
+  const cameraK = 1 - easeOutQuint(span(p, INTRO_SCORE.camera));
+  const skyK = 1 - easeOutCubic(span(p, INTRO_SCORE.sky));
+
+  /* ---------- camera: a slow push-in out of the flash ---------- */
+  if (camera) {
+    camera.position
+      .copy(plan.cameraPosition)
+      .addScaledVector(plan.cameraForward, -plan.cameraDolly * cameraK)
+      .addScaledVector(plan.cameraUp, plan.cameraLift * cameraK);
+
+    // A hair of tilt and roll, unwinding — the shot settling on its mark.
+    introScratch.euler.set(
+      THREE.MathUtils.degToRad(INTRO_AMOUNT.cameraPitchDeg) * cameraK,
+      0,
+      THREE.MathUtils.degToRad(INTRO_AMOUNT.cameraRollDeg) * cameraK,
+    );
+    camera.quaternion
+      .copy(plan.cameraQuaternion)
+      .multiply(introScratch.quaternion.setFromEuler(introScratch.euler));
+
+    const flash = camera.getObjectByName(INTRO_FLASH_NAME) as THREE.Mesh | undefined;
+
+    if (flash) {
+      const opacity = 1 - easeInOutCubic(span(p, INTRO_SCORE.flash));
+      const halfHeight =
+        Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * INTRO_FLASH_DISTANCE;
+
+      (flash.material as THREE.MeshBasicMaterial).opacity = opacity;
+      flash.visible = opacity > 0.001;
+      flash.position.set(0, 0, -INTRO_FLASH_DISTANCE);
+      flash.scale.set(
+        halfHeight * camera.aspect * 2 * INTRO_FLASH_BLEED,
+        halfHeight * 2 * INTRO_FLASH_BLEED,
+        1,
+      );
+    }
+  }
+
+  /* ---------- vortex: over-scaled, rolling, unwinding to rest ---------- */
+  const skyBase = getBaseTransform(rig.sky);
+
+  if (rig.sky && skyBase) {
+    // Multiplied onto the scroll zoom animateVortexRig just wrote, so the
+    // two compose instead of one clobbering the other.
+    rig.sky.scale.multiplyScalar(1 + INTRO_AMOUNT.skyZoom * skyK);
+    // The backdrop is a flat plane whose local +Z is its normal, so this is
+    // a true in-plane roll: the vortex spinning down, not the plane tipping
+    // out of frame.
+    rig.sky.rotation.z =
+      skyBase.rotation.z + THREE.MathUtils.degToRad(INTRO_AMOUNT.skyRollDeg) * skyK;
+  }
+
+  setEmissiveScale(
+    rig.sky,
+    settleTo1(INTRO_AMOUNT.skyGlow, easeOutCubic(span(p, INTRO_SCORE.skyGlow))),
+  );
+
+  /* ---------- light: blown out, then cooling and swinging home ---------- */
+  if (rig.sun) {
+    const base = rig.sun.userData.__baseIntensity as number | undefined;
+    const sunBase = getBaseTransform(rig.sun);
+
+    if (base !== undefined) {
+      rig.sun.intensity =
+        base * settleTo1(INTRO_AMOUNT.sunGlow, easeOutCubic(span(p, INTRO_SCORE.sunGlow)));
+    }
+
+    // glTF parents a directional light's target under the light itself, so
+    // rotating the node IS the sun swinging across the sky.
+    if (sunBase) {
+      const swing = 1 - easeInOutCubic(span(p, INTRO_SCORE.sunSwing));
+
+      rig.sun.rotation.set(
+        sunBase.rotation.x + THREE.MathUtils.degToRad(INTRO_AMOUNT.sunSwingXDeg) * swing,
+        sunBase.rotation.y + THREE.MathUtils.degToRad(INTRO_AMOUNT.sunSwingYDeg) * swing,
+        sunBase.rotation.z,
+      );
+    }
+  }
+
+  if (rig.fill) {
+    const base = rig.fill.userData.__baseIntensity as number | undefined;
+
+    if (base !== undefined) {
+      rig.fill.intensity =
+        base * settleTo1(INTRO_AMOUNT.fillGlow, easeOutCubic(span(p, INTRO_SCORE.fill)));
+    }
+  }
+
+  /* ---------- the rig swinging up out of its lean ----------
+     x and y are re-assigned by animateVortexRig every frame (scroll +
+     pointer), so the swing ADDS to them and the parallax keeps its full
+     range; z is the intro's alone, and the rig is built at identity, so
+     it is assigned outright. */
+  const swing = 1 - easeOutExpo(span(p, INTRO_SCORE.swing));
+
+  rig.pitch.rotation.x += INTRO_AMOUNT.swingPitchRad * swing;
+  rig.pitch.rotation.y += INTRO_AMOUNT.swingYawRad * swing;
+  rig.pitch.rotation.z = INTRO_AMOUNT.swingRollRad * swing;
+
+  /* ---------- the castle rising from behind the rocks ---------- */
+  const castleBase = getBaseTransform(rig.castleRig);
+
+  if (rig.castleRig && castleBase) {
+    const rise = 1 - easeOutExpo(span(p, INTRO_SCORE.castle));
+    const scale = settleTo1(INTRO_AMOUNT.castleScale, easeOutQuint(span(p, INTRO_SCORE.castle)));
+
+    rig.castleRig.position.set(
+      castleBase.position.x,
+      castleBase.position.y - plan.castleRise * rise,
+      castleBase.position.z,
+    );
+    rig.castleRig.rotation.set(
+      castleBase.rotation.x,
+      castleBase.rotation.y + THREE.MathUtils.degToRad(INTRO_AMOUNT.castleYawDeg) * rise,
+      castleBase.rotation.z,
+    );
+    rig.castleRig.scale.set(
+      castleBase.scale.x * scale,
+      castleBase.scale.y * scale,
+      castleBase.scale.z * scale,
+    );
+  }
+
+  // Cathedral first, spire after — the mass lands, then the silhouette
+  // punches up into the sky behind it.
+  const cathedralBase = getBaseTransform(rig.cathedral);
+
+  if (rig.cathedral && cathedralBase) {
+    const rise = 1 - easeOutExpo(span(p, INTRO_SCORE.cathedral));
+
+    rig.cathedral.position.set(
+      cathedralBase.position.x,
+      cathedralBase.position.y - plan.cathedralRise * rise,
+      cathedralBase.position.z,
+    );
+  }
+
+  const keepBase = getBaseTransform(rig.keepTower);
+
+  if (rig.keepTower && keepBase) {
+    const eased = easeOutExpo(span(p, INTRO_SCORE.keep));
+    const rise = 1 - eased;
+    const stretch = settleTo1(INTRO_AMOUNT.keepStretch, eased);
+
+    rig.keepTower.position.set(
+      keepBase.position.x,
+      keepBase.position.y - plan.keepRise * rise,
+      keepBase.position.z,
+    );
+    rig.keepTower.scale.set(keepBase.scale.x, keepBase.scale.y * stretch, keepBase.scale.z);
+  }
+
+  /* ---------- the flanking towers sweeping in to frame it ---------- */
+  const towersBase = getBaseTransform(rig.towersGroup);
+
+  if (rig.towersGroup && towersBase) {
+    const rise = 1 - easeOutQuint(span(p, INTRO_SCORE.towers));
+
+    rig.towersGroup.position.set(
+      towersBase.position.x,
+      towersBase.position.y - plan.towerRise * rise,
+      towersBase.position.z,
+    );
+  }
+
+  const applyTower = (
+    tower: THREE.Object3D | null,
+    window: IntroWindow,
+    side: number,
+  ) => {
+    const base = getBaseTransform(tower);
+
+    if (!tower || !base) {
+      return;
+    }
+
+    const arrive = 1 - easeOutQuint(span(p, window));
+
+    tower.position.set(
+      base.position.x + plan.towerSpread * side * arrive,
+      base.position.y - plan.towerRise * arrive,
+      base.position.z,
+    );
+    // Leaning outward, righting itself as it arrives.
+    tower.rotation.set(
+      base.rotation.x,
+      base.rotation.y,
+      base.rotation.z - THREE.MathUtils.degToRad(INTRO_AMOUNT.towerLeanDeg) * side * arrive,
+    );
+  };
+
+  applyTower(rig.towerLeft, INTRO_SCORE.towerLeft, plan.towerLeftSign);
+  applyTower(rig.towerRight, INTRO_SCORE.towerRight, plan.towerRightSign);
+
+  /* ---------- foreground rocks, settling last ---------- */
+  const rocksBase = getBaseTransform(rig.rocks);
+
+  if (rig.rocks && rocksBase) {
+    const eased = easeOutQuint(span(p, INTRO_SCORE.rocks));
+    const settle = 1 - eased;
+    const zoom = settleTo1(INTRO_AMOUNT.rocksZoom, eased);
+    // The billboard is sized to the frustum every re-fit, so its drop is
+    // measured against its own current half-height rather than a number
+    // captured at some other viewport size.
+    const geometry = (rig.rocks as THREE.Mesh).geometry;
+    const halfHeight = geometry?.boundingBox
+      ? ((geometry.boundingBox.max.y - geometry.boundingBox.min.y) / 2) * rocksBase.scale.y
+      : 0;
+
+    rig.rocks.position.set(
+      rocksBase.position.x,
+      rocksBase.position.y - halfHeight * INTRO_AMOUNT.rocksDrop * settle,
+      rocksBase.position.z,
+    );
+    rig.rocks.scale.set(
+      rocksBase.scale.x * zoom,
+      rocksBase.scale.y * zoom,
+      rocksBase.scale.z * zoom,
+    );
+  }
+
+  setEmissiveScale(
+    rig.rocks,
+    settleTo1(INTRO_AMOUNT.rocksGlow, easeOutCubic(span(p, INTRO_SCORE.rocksGlow))),
+  );
+}
+
+interface IntroState {
+  active: boolean;
+  elapsed: number;
+  flashColor: string;
+  plan: IntroPlan | null;
+}
+
+interface IntroSignal {
+  at: number;
+  flashColor?: string;
+}
+
+function readIntroSignal(): IntroSignal | null {
+  const signal = (window as unknown as Record<string, unknown>)[INTRO_STATE_KEY];
+
+  if (!signal || typeof signal !== 'object') {
+    return null;
+  }
+
+  const { at } = signal as IntroSignal;
+
+  return typeof at === 'number' ? (signal as IntroSignal) : null;
+}
+
+function prefersReducedMotion() {
+  return (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
 interface VortexSceneProps {
   guiRootRef: MutableRefObject<HTMLDivElement | null>;
   invalidateRef: MutableRefObject<() => void>;
@@ -905,6 +1551,12 @@ function VortexScene({
   const scrollSmoothRef = useRef(0);
   const pointerSmoothRef = useRef(new THREE.Vector2());
   const debugOffsetsRef = useRef(createDebugOffsets());
+  const introRef = useRef<IntroState>({
+    active: false,
+    elapsed: 0,
+    flashColor: INTRO_FLASH_COLOR,
+    plan: null,
+  });
   // Debug (remove with the debug pass): expose the actual render loop so the
   // page can see whether frames keep drawing and the damped value keeps moving.
   const frameCountRef = useRef(0);
@@ -945,6 +1597,56 @@ function VortexScene({
       invalidateRef.current = () => {};
     };
   }, [invalidate, invalidateRef]);
+
+  // The reveal, armed for the moment the page hands over the screen. The
+  // plan is measured on the first frame rather than here, so it reads world
+  // matrices the renderer has actually updated.
+  useEffect(() => {
+    if (prefersReducedMotion()) {
+      return undefined;
+    }
+
+    const start = (flashColor?: string) => {
+      const intro = introRef.current;
+
+      intro.flashColor = flashColor ?? INTRO_FLASH_COLOR;
+      intro.plan = null;
+      intro.elapsed = 0;
+      intro.active = true;
+
+      if (authoredCamera) {
+        try {
+          ensureIntroFlash(authoredCamera, intro.flashColor);
+        } catch {
+          // An unparseable colour from the page is not worth failing over.
+          ensureIntroFlash(authoredCamera, INTRO_FLASH_COLOR);
+        }
+      }
+
+      invalidate();
+    };
+
+    const onEnter = (event: Event) => {
+      const detail = (event as CustomEvent<IntroSignal>).detail;
+
+      start(typeof detail?.flashColor === 'string' ? detail.flashColor : undefined);
+    };
+
+    window.addEventListener(INTRO_EVENT, onEnter);
+
+    // Mounted late (the section is display:none until the experience
+    // starts): catch a hand-over that already happened.
+    const pending = readIntroSignal();
+
+    if (pending && Date.now() - pending.at < INTRO_LATE_MOUNT_MS) {
+      start(pending.flashColor);
+    }
+
+    return () => {
+      window.removeEventListener(INTRO_EVENT, onEnter);
+      removeIntroFlash(authoredCamera);
+    };
+  }, [authoredCamera, invalidate]);
 
   // Designer positioning panel: live-adjustable offsets on top of the
   // authored/fitted rest state, so a Figma comparison can be dialed in
@@ -1059,6 +1761,26 @@ function VortexScene({
 
     animateVortexRig(rig, scrollSmoothRef.current, pointer, debugOffsetsRef.current.sky.scale);
 
+    // The reveal layers on top of the rest state animateVortexRig just
+    // wrote, so scroll and pointer keep their full range underneath it.
+    const intro = introRef.current;
+
+    if (intro.active) {
+      intro.elapsed += dt;
+      intro.plan = intro.plan ?? measureIntro(rig, authoredCamera);
+
+      const progress = Math.min(intro.elapsed / INTRO_DURATION, 1);
+
+      applyIntro(rig, authoredCamera, intro.plan, progress);
+
+      // p === 1 restored every baseline exactly, so the intro is done
+      // touching the scene and simply stops.
+      if (progress >= 1) {
+        intro.active = false;
+        removeIntroFlash(authoredCamera);
+      }
+    }
+
     // Debug (remove with the debug pass): publish the live render loop.
     frameCountRef.current += 1;
     if (!debugHostRef.current) {
@@ -1070,8 +1792,10 @@ function VortexScene({
       debugHostRef.current.setAttribute('data-scroll-smooth', scrollSmoothRef.current.toFixed(3));
     }
 
-    // Keep frames coming until every damped value has settled on its target.
+    // Keep frames coming until every damped value has settled on its target
+    // — and for as long as the reveal is still running.
     const settled =
+      !intro.active &&
       Math.abs(scrollSmoothRef.current - scrollTarget.current) < SETTLE_EPSILON &&
       Math.abs(pointer.x - pointerX) < SETTLE_EPSILON &&
       Math.abs(pointer.y - pointerY) < SETTLE_EPSILON;
@@ -1203,6 +1927,22 @@ export function CastleScene({
     return () => {
       window.removeEventListener('scroll', updateScroll);
       window.removeEventListener('resize', updateScroll);
+    };
+  }, []);
+
+  // The section is hidden until the experience starts, so the observer below
+  // may still have the loop asleep at the exact moment the reveal fires.
+  // Wake it here; the observer's own callback takes over from the next frame.
+  useEffect(() => {
+    const wake = () => {
+      setFrameloop('demand');
+      invalidateRef.current();
+    };
+
+    window.addEventListener(INTRO_EVENT, wake);
+
+    return () => {
+      window.removeEventListener(INTRO_EVENT, wake);
     };
   }, []);
 
