@@ -1,7 +1,9 @@
 <!-- ============================================================
      BLACKLETTER — before </body> loader (paste ONCE into Webflow)
 
-     All page code lives in this repo and is served via jsDelivr:
+     All page code lives in this repo and is served from the project's
+     own Vercel deployment (vite.config.ts emits both files into the
+     build, next to the 3D assets):
        webflow/blackletter-page.css  — all styles
        webflow/blackletter-page.js   — hero curtain, section intros,
                                        footer loop, shop cards,
@@ -9,14 +11,22 @@
 
      Workflow after editing those files:
        1. git push to main
-       2. open BOTH purge links (jsDelivr caches @main ~12h):
-          https://purge.jsdelivr.net/gh/saad-azez/Blackletter@main/webflow/blackletter-page.js
-          https://purge.jsdelivr.net/gh/saad-azez/Blackletter@main/webflow/blackletter-page.css
+       2. wait for the Vercel deploy to go green
        3. hard-refresh the site (Ctrl+Shift+R)
 
-     For a frozen production release, replace @main in the two URLs
-     below with a commit hash (e.g. @1a2b3c4) — those URLs are
-     immutable and permanently cached.
+     No purge step: Vercel serves these must-revalidate, so a finished
+     deploy is live immediately.
+
+     For a frozen production release, swap blackletter.vercel.app for
+     that deployment's own immutable URL from the Vercel dashboard.
+
+     DO NOT go back to jsDelivr's GitHub proxy
+     (cdn.jsdelivr.net/gh/saad-azez/Blackletter@<hash>/webflow/...).
+     It can no longer fetch this repo at ANY ref or path — every one
+     answers 404 "Failed to fetch saad-azez/Blackletter from GitHub",
+     already-pinned commits included — and a page script that fails to
+     load takes the whole experience with it: no curtain, no intros,
+     no smooth scroll, and a hero that never reveals.
 
      NOTE: delete the old shop/subscribe/footer embed blocks from
      the Webflow page — they are bundled in blackletter-page.js now
@@ -25,5 +35,5 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/saad-azez/Blackletter@e589599/webflow/blackletter-page.css">
-<script type="module" src="https://cdn.jsdelivr.net/gh/saad-azez/Blackletter@e589599/webflow/blackletter-page.js"></script>
+<link rel="stylesheet" href="https://blackletter.vercel.app/webflow/blackletter-page.css">
+<script type="module" src="https://blackletter.vercel.app/webflow/blackletter-page.js"></script>

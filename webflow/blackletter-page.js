@@ -12,7 +12,10 @@
      4. footer reveal
    ============================================================ */
 
-import PaperCurtainEffect from "https://cdn.jsdelivr.net/gh/saad-azez/Blackletter@abfefdc/public/BlackletterPaperCurtain.mjs";
+// Same origin as this file (see the emitWebflowPageAssets note in
+// vite.config.ts): jsDelivr's GitHub proxy can no longer fetch this repo at
+// any ref, and a failed import here silently kills the whole page script.
+import PaperCurtainEffect from "https://blackletter.vercel.app/BlackletterPaperCurtain.mjs";
 
 if (window.gsap && window.ScrollTrigger) {
   main();
