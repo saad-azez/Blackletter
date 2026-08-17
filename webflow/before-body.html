@@ -11,11 +11,16 @@
 
      Workflow after editing those files:
        1. git push to main
-       2. wait for the Vercel deploy to go green
+       2. npx vercel --prod      (deploys are manual — this project has
+                                  no Vercel/GitHub integration, so a push
+                                  on its own changes nothing that is live)
        3. hard-refresh the site (Ctrl+Shift+R)
 
      No purge step: Vercel serves these must-revalidate, so a finished
      deploy is live immediately.
+
+     The same deployment also mirrors src/assets, which is where the 3D
+     islands now load their GLBs and textures from (see vite.config.ts).
 
      For a frozen production release, swap blackletter.vercel.app for
      that deployment's own immutable URL from the Vercel dashboard.
