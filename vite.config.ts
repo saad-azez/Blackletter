@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from 'node:fs'
+import { copyFileSync, cpSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { defineConfig } from 'vite'
@@ -34,6 +34,20 @@ function emitWebflowPageAssets() {
       mkdirSync(outDir, { recursive: true })
       WEBFLOW_PAGE_FILES.forEach((file) => {
         copyFileSync(resolve(projectRoot, 'webflow', file), resolve(outDir, file))
+      })
+
+      // The 3D islands load their GLBs and textures by absolute URL, and
+      // those URLs pointed at raw.githack.com, a GitHub raw proxy that
+      // answers 503 and 429 (rate limited) often enough to leave the page
+      // with no 3D at all — and to stall the gated preloader into its 20s
+      // safety cap, which is the long dark screen before the hero appears.
+      //
+      // Mirrored at the SAME path the proxy used, so swapping the host in
+      // the Webflow component props is all those URLs need:
+      //   raw.githack.com/saad-azez/Blackletter/main/src/assets/…
+      //   →  <this deployment>/src/assets/…
+      cpSync(resolve(projectRoot, 'src/assets'), resolve(projectRoot, 'dist/src/assets'), {
+        recursive: true,
       })
     },
   } as const
